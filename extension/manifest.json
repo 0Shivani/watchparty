@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "WatchParty",
+  "version": "1.0.0",
+  "description": "Sync video playback with friends across YouTube, Netflix, Prime Video, and JioHotstar.",
+  "permissions": ["storage", "tabs", "scripting", "activeTab", "alarms"],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://*.netflix.com/*",
+    "*://*.primevideo.com/*",
+    "*://*.hotstar.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["src/content/youtube.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.netflix.com/*"],
+      "js": ["src/content/netflix.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.primevideo.com/*"],
+      "js": ["src/content/prime.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.hotstar.com/*"],
+      "js": ["src/content/hotstar.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "public/icons/icon16.png",
+      "48": "public/icons/icon48.png",
+      "128": "public/icons/icon128.png"
+    }
+  }
+}
