@@ -1,10 +1,16 @@
 {
   "name": "watchparty-server",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "dev": "node --watch index.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "vitest run --environment node"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.2",
+    "vitest": "^1.0.0"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -1,9 +1,9 @@
-const express = require("express");
-const cors = require("cors");
-const { createServer } = require("http");
-const { Server } = require("socket.io");
+import express from "express";
+import cors from "cors";
+import { createServer } from "http";
+import { Server } from "socket.io";
+import { fileURLToPath } from "url";
 
-const PORT = process.env.PORT || 3001;
 const MAX_MEMBERS = 10;
 
 const app = express();
@@ -159,6 +159,12 @@ io.on("connection", (socket) => {
   });
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`WatchParty server running on http://localhost:${PORT}`);
-});
+// Only start listening when run directly, not when imported by tests
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const PORT = process.env.PORT || 3001;
+  httpServer.listen(PORT, () => {
+    console.log(`WatchParty server running on port ${PORT}`);
+  });
+}
+
+export { httpServer };
