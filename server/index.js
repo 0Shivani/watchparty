@@ -17,6 +17,10 @@ const io = new Server(httpServer, {
 
 const rooms = new Map();
 
+function safePayload(data) {
+  return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+}
+
 function generateRoomCode() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let code = "";
@@ -67,6 +71,19 @@ function removeSocketFromRoom(socketId, roomCode) {
   emitMemberUpdate(roomCode);
 }
 
+function leaveCurrentRoom(socket, roomsMap) {
+  const currentRoomCode = socket.data.roomCode;
+  if (!currentRoomCode) return;
+
+  const room = roomsMap.get(currentRoomCode);
+  if (room) {
+    socket.leave(currentRoomCode);
+    removeSocketFromRoom(socket.id, currentRoomCode);
+  }
+
+  socket.data.roomCode = null;
+}
+
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", rooms: rooms.size });
 });
@@ -75,6 +92,7 @@ io.on("connection", (socket) => {
   socket.data.roomCode = null;
 
   socket.on("create-room", () => {
+    leaveCurrentRoom(socket, rooms);
     const roomCode = createUniqueRoomCode();
     rooms.set(roomCode, { hostId: socket.id, members: new Set([socket.id]) });
 
@@ -85,7 +103,12 @@ io.on("connection", (socket) => {
     emitMemberUpdate(roomCode);
   });
 
-  socket.on("join-room", ({ roomCode }) => {
+  socket.on("join-room", (rawData) => {
+    const { roomCode } = safePayload(rawData);
+    if (!roomCode) {
+      socket.emit("room-error", { message: "Room code is required." });
+      return;
+    }
     const normalizedCode = String(roomCode || "").toUpperCase().trim();
     const room = getRoomAndValidate(normalizedCode, socket);
     if (!room) return;
@@ -95,6 +118,7 @@ io.on("connection", (socket) => {
       return;
     }
 
+    leaveCurrentRoom(socket, rooms);
     room.members.add(socket.id);
     socket.join(normalizedCode);
     socket.data.roomCode = normalizedCode;
@@ -106,7 +130,9 @@ io.on("connection", (socket) => {
     emitMemberUpdate(normalizedCode);
   });
 
-  socket.on("sync-event", ({ roomCode, action }) => {
+  socket.on("sync-event", (rawData) => {
+    const { roomCode, action } = safePayload(rawData);
+    if (!roomCode || !action || typeof action.type !== "string") return;
     const normalizedCode = String(roomCode || "").toUpperCase().trim();
     const room = rooms.get(normalizedCode);
     if (!room || !room.members.has(socket.id)) return;
@@ -114,7 +140,8 @@ io.on("connection", (socket) => {
     socket.to(normalizedCode).emit("sync-event", { action });
   });
 
-  socket.on("leave-room", ({ roomCode }) => {
+  socket.on("leave-room", (rawData) => {
+    const { roomCode } = safePayload(rawData);
     const normalizedCode = String(roomCode || socket.data.roomCode || "")
       .toUpperCase()
       .trim();
@@ -128,9 +155,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    const roomCode = socket.data.roomCode;
-    if (!roomCode) return;
-    removeSocketFromRoom(socket.id, roomCode);
+    leaveCurrentRoom(socket, rooms);
   });
 });
 

@@ -4,7 +4,19 @@ const STORAGE_KEYS = {
   inRoom: "inRoom",
 };
 
-const KEEP_ALIVE_ALARM = "watchparty-keepalive";
+const ALARM_NAME = "keepAlive";
+
+async function restoreAlarmIfNeeded() {
+  const { inRoom } = await chrome.storage.local.get([STORAGE_KEYS.inRoom]);
+  if (!inRoom) return;
+
+  const existing = await chrome.alarms.get(ALARM_NAME);
+  if (!existing) {
+    chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.4 });
+  }
+}
+
+restoreAlarmIfNeeded();
 
 async function getActiveTabId() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -17,9 +29,9 @@ async function setSessionState(partialState) {
 
 async function maybeToggleKeepAlive(inRoom) {
   if (inRoom) {
-    await chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 25 / 60 });
+    await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.4 });
   } else {
-    await chrome.alarms.clear(KEEP_ALIVE_ALARM);
+    await chrome.alarms.clear(ALARM_NAME);
   }
 }
 
@@ -102,8 +114,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== KEEP_ALIVE_ALARM) return;
-  chrome.runtime.getPlatformInfo(() => {
-    // Touching extension APIs on alarm tick helps keep the worker alive while in-room.
-  });
+  if (alarm.name === ALARM_NAME) {
+  }
 });

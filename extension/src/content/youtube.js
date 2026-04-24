@@ -1,13 +1,15 @@
 let isSyncing = false;
-let attachedVideo = null;
+let currentVideo = null;
+let lastUrl = location.href;
+const attachedVideos = new WeakSet();
 
 function findVideo() {
   return document.querySelector(".html5-video-container video") || document.querySelector("video");
 }
 
 function attachPlayerListeners(video) {
-  if (!video || attachedVideo === video) return;
-  attachedVideo = video;
+  if (!video || attachedVideos.has(video)) return;
+  attachedVideos.add(video);
 
   const sendEvent = (type) => {
     if (isSyncing) return;
@@ -28,39 +30,105 @@ chrome.runtime.onMessage.addListener((message) => {
   if (!video) return;
 
   const { action } = message;
-  isSyncing = true;
+  if (!action || typeof action.type !== "string") return;
 
-  if (Math.abs(video.currentTime - action.currentTime) > 2) {
+  if (action.type === "seek" || Math.abs(video.currentTime - action.currentTime) > 2) {
+    isSyncing = true;
     video.currentTime = action.currentTime;
+    video.addEventListener(
+      "seeked",
+      () => {
+        isSyncing = false;
+      },
+      { once: true }
+    );
   }
 
-  if (action.type === "play") video.play().catch(() => {});
-  if (action.type === "pause") video.pause();
-  if (action.type === "seek") {
-    // Time already corrected above.
+  if (action.type === "play") {
+    isSyncing = true;
+    video
+      .play()
+      .catch(() => {})
+      .finally(() => {
+        setTimeout(() => {
+          isSyncing = false;
+        }, 300);
+      });
   }
 
-  setTimeout(() => {
-    isSyncing = false;
-  }, 500);
+  if (action.type === "pause") {
+    isSyncing = true;
+    video.pause();
+    setTimeout(() => {
+      isSyncing = false;
+    }, 100);
+  }
 });
 
-function init() {
+function attachToPlayer() {
   const video = findVideo();
-  if (video) {
-    attachPlayerListeners(video);
-    return;
-  }
+  if (!video || video === currentVideo) return;
+  currentVideo = video;
+  attachPlayerListeners(video);
 
-  const observer = new MutationObserver(() => {
-    const v = findVideo();
-    if (v) {
-      observer.disconnect();
-      attachPlayerListeners(v);
+  const observedVideo = video;
+  const videoRemovalObserver = new MutationObserver(() => {
+    if (!document.contains(observedVideo)) {
+      if (currentVideo === observedVideo) {
+        currentVideo = null;
+      }
+      videoRemovalObserver.disconnect();
+      waitForVideo();
     }
   });
+  videoRemovalObserver.observe(document.body, { childList: true, subtree: true });
+}
 
+function waitForVideo() {
+  const video = findVideo();
+  if (video && video !== currentVideo) {
+    attachToPlayer();
+    return;
+  }
+  const observer = new MutationObserver(() => {
+    const v = findVideo();
+    if (v && v !== currentVideo) {
+      observer.disconnect();
+      attachToPlayer();
+    }
+  });
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
-init();
+function watchNavigation() {
+  const _push = history.pushState.bind(history);
+  const _replace = history.replaceState.bind(history);
+
+  history.pushState = (...args) => {
+    _push(...args);
+    onNavigate();
+  };
+  history.replaceState = (...args) => {
+    _replace(...args);
+    onNavigate();
+  };
+
+  window.addEventListener("popstate", onNavigate);
+}
+
+function onNavigate() {
+  if (location.href === lastUrl) return;
+  lastUrl = location.href;
+  currentVideo = null;
+  waitForVideo();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("yt-navigate-finish", () => {
+    currentVideo = null;
+    waitForVideo();
+  });
+}
+
+watchNavigation();
+waitForVideo();
