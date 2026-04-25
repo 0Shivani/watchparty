@@ -28,6 +28,7 @@ function formatAction(action) {
 export default function App() {
   const socketRef = useRef(null);
   const connectingRef = useRef(false);
+  const autoRejoinInFlightRef = useRef(false);
 
   const [serverUrlInput, setServerUrlInput] = useState("");
   const [savedServerUrl, setSavedServerUrl] = useState("");
@@ -78,18 +79,22 @@ export default function App() {
     }
 
     const onRoomJoined = () => {
+      autoRejoinInFlightRef.current = false;
       socket.off("room-error", onRoomError);
       setConnectionState("connected");
       setReconnectAttempt(0);
       setExpiredBanner(false);
+      setErrorText("");
     };
 
     const onRoomError = async () => {
+      autoRejoinInFlightRef.current = false;
       socket.off("room-joined", onRoomJoined);
       setConnectionState("connected");
       setRoomCode("");
       setInRoom(false);
       setReconnectAttempt(0);
+      setErrorText("");
       await chrome.storage.local.set({
         [STORAGE_KEYS.roomCode]: "",
         [STORAGE_KEYS.inRoom]: false,
@@ -98,6 +103,7 @@ export default function App() {
       setTimeout(() => setExpiredBanner(false), 5000);
     };
 
+    autoRejoinInFlightRef.current = true;
     socket.emit("join-room", { roomCode: storedRoomCode });
     socket.once("room-joined", onRoomJoined);
     socket.once("room-error", onRoomError);
@@ -156,6 +162,7 @@ export default function App() {
     });
 
     socket.on("room-error", ({ message }) => {
+      if (autoRejoinInFlightRef.current) return;
       setErrorText(message || "Something went wrong.");
     });
   }
