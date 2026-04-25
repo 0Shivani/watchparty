@@ -110,6 +110,8 @@ export default function App() {
   }
 
   function bindSocket(socket) {
+    const manager = socket.io;
+
     socket.on("connect", () => {
       setConnectionState("connected");
       setReconnectAttempt(0);
@@ -120,17 +122,18 @@ export default function App() {
       setConnectionState("disconnected");
     });
 
-    socket.on("reconnect_attempt", (attempt) => {
+    manager.on("reconnect_attempt", (attempt) => {
       setConnectionState("reconnecting");
       setReconnectAttempt(attempt);
     });
-
-    socket.on("reconnect", () => {
+    // In socket.io-client v4, reconnection lifecycle events (reconnect_attempt,
+    // reconnect, reconnect_failed) are emitted by the Manager, not the Socket instance.
+    manager.on("reconnect", () => {
       setConnectionState("rejoining");
       void autoRejoinRoom();
     });
 
-    socket.on("reconnect_failed", () => {
+    manager.on("reconnect_failed", () => {
       setConnectionState("failed");
     });
 
