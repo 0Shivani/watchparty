@@ -38,7 +38,10 @@ describe("Room Creation", () => {
 
   afterEach(() => {
     [clientA, clientB, clientC].forEach((c) => {
-      if (c?.connected) c.disconnect();
+      if (c?.connected) {
+        c.emit("leave-room", {});
+        c.disconnect();
+      }
     });
     clientA = undefined;
     clientB = undefined;
@@ -57,6 +60,7 @@ describe("Room Creation", () => {
 
   it("It should place the socket in only one room after two create-room calls", async () => {
     clientA = await createClient();
+    const baselineRooms = (await getHealth()).rooms;
 
     const firstCreated = new Promise((resolve) => clientA.once("room-created", resolve));
     clientA.emit("create-room");
@@ -69,7 +73,7 @@ describe("Room Creation", () => {
     expect(firstPayload.roomCode).not.toBe(secondPayload.roomCode);
 
     const health = await getHealth();
-    expect(health.rooms).toBe(1);
+    expect(health.rooms).toBe(baselineRooms + 1);
   });
 
   it("GET /health should return status ok and a rooms count", async () => {
@@ -87,7 +91,10 @@ describe("Room Joining", () => {
 
   afterEach(() => {
     [clientA, clientB, clientC].forEach((c) => {
-      if (c?.connected) c.disconnect();
+      if (c?.connected) {
+        c.emit("leave-room", {});
+        c.disconnect();
+      }
     });
     clientA = undefined;
     clientB = undefined;
@@ -172,6 +179,7 @@ describe("Room Joining", () => {
     clientA = await createClient();
     clientB = await createClient();
     clientC = await createClient();
+    const baselineRooms = (await getHealth()).rooms;
 
     const room1Created = new Promise((resolve) => clientA.once("room-created", resolve));
     clientA.emit("create-room");
@@ -193,7 +201,7 @@ describe("Room Joining", () => {
     expect(leftUpdate.memberCount).toBe(1);
 
     const health = await getHealth();
-    expect(health.rooms).toBe(2);
+    expect(health.rooms).toBe(baselineRooms + 2);
   });
 });
 
@@ -204,7 +212,10 @@ describe("Sync Events", () => {
 
   afterEach(() => {
     [clientA, clientB, clientC].forEach((c) => {
-      if (c?.connected) c.disconnect();
+      if (c?.connected) {
+        c.emit("leave-room", {});
+        c.disconnect();
+      }
     });
     clientA = undefined;
     clientB = undefined;
@@ -279,7 +290,10 @@ describe("Leaving and Disconnecting", () => {
 
   afterEach(() => {
     [clientA, clientB, clientC].forEach((c) => {
-      if (c?.connected) c.disconnect();
+      if (c?.connected) {
+        c.emit("leave-room", {});
+        c.disconnect();
+      }
     });
     clientA = undefined;
     clientB = undefined;
@@ -349,7 +363,42 @@ describe("Leaving and Disconnecting", () => {
     clientA.disconnect();
     await new Promise((resolve) => setTimeout(resolve, 200));
     const afterHealth = await getHealth();
+    expect(afterHealth.rooms).toBe(beforeHealth.rooms);
+  });
 
-    expect(afterHealth.rooms).toBe(beforeHealth.rooms - 1);
+  it("It should keep a room alive during the grace period after last member disconnects", async () => {
+    clientA = await createClient();
+    const created = new Promise((resolve) => clientA.once("room-created", resolve));
+    clientA.emit("create-room");
+    await created;
+
+    const beforeHealth = await getHealth();
+    expect(beforeHealth.rooms).toBeGreaterThanOrEqual(1);
+
+    clientA.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const afterHealth = await getHealth();
+
+    expect(afterHealth.rooms).toBe(beforeHealth.rooms);
+  });
+
+  it("It should allow a client to rejoin a room within the grace period", async () => {
+    clientA = await createClient();
+    const created = new Promise((resolve) => clientA.once("room-created", resolve));
+    clientA.emit("create-room");
+    const { roomCode } = await created;
+
+    clientA.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    clientB = await createClient();
+    const joined = new Promise((resolve) => clientB.once("room-joined", resolve));
+    const roomError = vi.fn();
+    clientB.on("room-error", roomError);
+    clientB.emit("join-room", { roomCode });
+    const payload = await joined;
+
+    expect(payload.roomCode).toBe(roomCode);
+    expect(roomError).not.toHaveBeenCalled();
   });
 });

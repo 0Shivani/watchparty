@@ -16,6 +16,7 @@ const io = new Server(httpServer, {
 });
 
 const rooms = new Map();
+const disconnectTimers = new Map(); // socketId -> timeoutId
 
 function safePayload(data) {
   return data && typeof data === "object" && !Array.isArray(data) ? data : {};
@@ -53,32 +54,29 @@ function emitMemberUpdate(roomCode) {
   io.to(roomCode).emit("member-update", { memberCount: room.members.size });
 }
 
-function removeSocketFromRoom(socketId, roomCode) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
-
-  room.members.delete(socketId);
-
-  if (room.members.size === 0) {
-    rooms.delete(roomCode);
-    return;
-  }
-
-  if (room.hostId === socketId) {
-    room.hostId = room.members.values().next().value;
-  }
-
-  emitMemberUpdate(roomCode);
-}
-
 function leaveCurrentRoom(socket, roomsMap) {
   const currentRoomCode = socket.data.roomCode;
   if (!currentRoomCode) return;
 
+  const pendingTimer = disconnectTimers.get(socket.id);
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    disconnectTimers.delete(socket.id);
+  }
+
   const room = roomsMap.get(currentRoomCode);
   if (room) {
+    room.members.delete(socket.id);
     socket.leave(currentRoomCode);
-    removeSocketFromRoom(socket.id, currentRoomCode);
+
+    if (room.members.size === 0) {
+      roomsMap.delete(currentRoomCode);
+    } else {
+      if (room.hostId === socket.id) {
+        room.hostId = room.members.values().next().value;
+      }
+      emitMemberUpdate(currentRoomCode);
+    }
   }
 
   socket.data.roomCode = null;
@@ -146,16 +144,38 @@ io.on("connection", (socket) => {
       .toUpperCase()
       .trim();
     if (!normalizedCode) return;
-
-    socket.leave(normalizedCode);
-    removeSocketFromRoom(socket.id, normalizedCode);
-    if (socket.data.roomCode === normalizedCode) {
-      socket.data.roomCode = null;
-    }
+    leaveCurrentRoom(socket, rooms);
   });
 
   socket.on("disconnect", () => {
-    leaveCurrentRoom(socket, rooms);
+    const roomCode = socket.data.roomCode;
+    if (!roomCode) return;
+
+    const room = rooms.get(roomCode);
+    if (!room) return;
+
+    room.members.delete(socket.id);
+    socket.leave(roomCode);
+
+    if (room.hostId === socket.id && room.members.size > 0) {
+      room.hostId = room.members.values().next().value;
+    }
+
+    io.to(roomCode).emit("member-update", { memberCount: room.members.size });
+
+    if (room.members.size === 0) {
+      const timer = setTimeout(() => {
+        const r = rooms.get(roomCode);
+        if (r && r.members.size === 0) {
+          rooms.delete(roomCode);
+        }
+        disconnectTimers.delete(socket.id);
+      }, 45000);
+
+      disconnectTimers.set(socket.id, timer);
+    }
+
+    socket.data.roomCode = null;
   });
 });
 

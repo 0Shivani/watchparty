@@ -35,17 +35,17 @@ export default function App() {
   const [roomCode, setRoomCode] = useState("");
   const [memberCount, setMemberCount] = useState(1);
   const [lastAction, setLastAction] = useState(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [connectionState, setConnectionState] = useState("disconnected");
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [expiredBanner, setExpiredBanner] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [inRoom, setInRoom] = useState(false);
 
   const uiState = useMemo(() => {
     if (!savedServerUrl) return "setup";
-    if (isReconnecting) return "error";
     if (inRoom) return "in-room";
     return "lobby";
-  }, [savedServerUrl, isReconnecting, inRoom]);
+  }, [savedServerUrl, inRoom]);
 
   async function persistSession(next) {
     await chrome.runtime.sendMessage({
@@ -58,23 +58,74 @@ export default function App() {
     });
   }
 
+  async function autoRejoinRoom() {
+    const socket = socketRef.current;
+    if (!socket?.connected) return;
+
+    const stored = await chrome.storage.local.get([STORAGE_KEYS.roomCode, STORAGE_KEYS.inRoom]);
+
+    if (!stored[STORAGE_KEYS.inRoom] || !stored[STORAGE_KEYS.roomCode]) {
+      setConnectionState("connected");
+      return;
+    }
+
+    const storedRoomCode = String(stored[STORAGE_KEYS.roomCode] || "")
+      .toUpperCase()
+      .trim();
+    if (!storedRoomCode) {
+      setConnectionState("connected");
+      return;
+    }
+
+    const onRoomJoined = () => {
+      socket.off("room-error", onRoomError);
+      setConnectionState("connected");
+      setReconnectAttempt(0);
+      setExpiredBanner(false);
+    };
+
+    const onRoomError = async () => {
+      socket.off("room-joined", onRoomJoined);
+      setConnectionState("connected");
+      setRoomCode("");
+      setInRoom(false);
+      setReconnectAttempt(0);
+      await chrome.storage.local.set({
+        [STORAGE_KEYS.roomCode]: "",
+        [STORAGE_KEYS.inRoom]: false,
+      });
+      setExpiredBanner(true);
+      setTimeout(() => setExpiredBanner(false), 5000);
+    };
+
+    socket.emit("join-room", { roomCode: storedRoomCode });
+    socket.once("room-joined", onRoomJoined);
+    socket.once("room-error", onRoomError);
+  }
+
   function bindSocket(socket) {
     socket.on("connect", () => {
-      setIsConnected(true);
-      setIsReconnecting(false);
+      setConnectionState("connected");
+      setReconnectAttempt(0);
       setErrorText("");
     });
 
     socket.on("disconnect", () => {
-      setIsConnected(false);
-      if (savedServerUrl) {
-        setIsReconnecting(true);
-      }
+      setConnectionState("disconnected");
+    });
+
+    socket.on("reconnect_attempt", (attempt) => {
+      setConnectionState("reconnecting");
+      setReconnectAttempt(attempt);
     });
 
     socket.on("reconnect", () => {
-      setIsConnected(true);
-      setIsReconnecting(false);
+      setConnectionState("rejoining");
+      void autoRejoinRoom();
+    });
+
+    socket.on("reconnect_failed", () => {
+      setConnectionState("failed");
     });
 
     socket.on("sync-event", async ({ action }) => {
@@ -93,6 +144,9 @@ export default function App() {
       setRoomCode(joinedRoomCode);
       setInRoom(true);
       setMemberCount(count);
+      setConnectionState("connected");
+      setReconnectAttempt(0);
+      setExpiredBanner(false);
       setErrorText("");
       await persistSession({ roomCode: joinedRoomCode, inRoom: true });
     });
@@ -112,12 +166,12 @@ export default function App() {
 
     connectingRef.current = true;
     const socket = io(url, {
-      transports: ["websocket"],
-      autoConnect: true,
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
+      reconnectionDelayMax: 15000,
+      randomizationFactor: 0.4,
+      timeout: 10000,
     });
     socketRef.current = socket;
     bindSocket(socket);
@@ -204,6 +258,8 @@ export default function App() {
       socketRef.current = null;
     }
 
+    setConnectionState("disconnected");
+    setReconnectAttempt(0);
     setInRoom(false);
     setRoomCode("");
     setJoinCodeInput("");
@@ -225,8 +281,9 @@ export default function App() {
     setMemberCount(1);
     setLastAction(null);
     setErrorText("");
-    setIsConnected(false);
-    setIsReconnecting(false);
+    setConnectionState("disconnected");
+    setReconnectAttempt(0);
+    setExpiredBanner(false);
     await chrome.storage.local.set({
       [STORAGE_KEYS.serverUrl]: "",
       [STORAGE_KEYS.roomCode]: "",
@@ -246,14 +303,28 @@ export default function App() {
         <h1>WatchParty</h1>
       </header>
 
-      {uiState === "error" ? (
-        <div className="banner warning">
-          <div className="spinner" />
-          <span>Connection lost. Reconnecting...</span>
+      {connectionState === "reconnecting" && (
+        <div className="banner banner--warning">
+          <span className="spinner" />
+          Reconnecting... (attempt {reconnectAttempt})
         </div>
-      ) : null}
+      )}
 
-      {!!errorText && <div className="banner error">{errorText}</div>}
+      {connectionState === "rejoining" && (
+        <div className="banner banner--warning">
+          <span className="spinner" />
+          Back online - rejoining room...
+        </div>
+      )}
+
+      {expiredBanner && (
+        <div className="banner banner--error">
+          Your room expired while offline. Create or join a new room.
+          <button onClick={() => setExpiredBanner(false)}>X</button>
+        </div>
+      )}
+
+      {!!errorText && <div className="banner banner--error">{errorText}</div>}
 
       {uiState === "setup" && (
         <section className="card">
@@ -274,8 +345,8 @@ export default function App() {
       {uiState === "lobby" && (
         <section className="card">
           <div className="status-row">
-            <span className={`dot ${isConnected ? "online" : "offline"}`} />
-            <span>{isConnected ? "Connected" : "Disconnected"}</span>
+            <span className={`dot ${connectionState === "connected" ? "online" : "offline"}`} />
+            <span>{connectionState === "connected" ? "Connected" : "Disconnected"}</span>
           </div>
           <button className="btn primary" onClick={createRoom}>
             Create Room
