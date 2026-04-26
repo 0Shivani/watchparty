@@ -80,6 +80,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
+  if (message.type === "AD_STARTED") {
+    if (!sender.tab) {
+      sendResponse({ ok: true, ignored: true });
+      return;
+    }
+    chrome.runtime.sendMessage({ type: "AD_STARTED" });
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (message.type === "AD_ENDED") {
+    if (!sender.tab) {
+      sendResponse({ ok: true, ignored: true });
+      return;
+    }
+    chrome.runtime.sendMessage({ type: "AD_ENDED" });
+    sendResponse({ ok: true });
+    return;
+  }
+
   if (message.type === "SET_SESSION_STATE") {
     const { serverUrl = "", roomCode = "", inRoom = false } = message.payload || {};
     setSessionState({

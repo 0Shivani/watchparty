@@ -283,6 +283,81 @@ describe("Sync Events", () => {
   });
 });
 
+describe("Ad Detection Events", () => {
+  let clientA;
+  let clientB;
+
+  afterEach(() => {
+    [clientA, clientB].forEach((c) => {
+      if (c?.connected) {
+        c.emit("leave-room", {});
+        c.disconnect();
+      }
+    });
+    clientA = undefined;
+    clientB = undefined;
+  });
+
+  async function connectTwoClientsInSameRoomWithUsernames() {
+    clientA = await createClient();
+    clientB = await createClient();
+
+    const created = new Promise((resolve) => clientA.once("room-created", resolve));
+    clientA.emit("create-room", { username: "HostUser" });
+    const { roomCode } = await created;
+
+    const joined = new Promise((resolve) => clientB.once("room-joined", resolve));
+    clientB.emit("join-room", { roomCode, username: "GuestUser" });
+    await joined;
+
+    return roomCode;
+  }
+
+  it("It should broadcast ad-started to other room members with the username", async () => {
+    const roomCode = await connectTwoClientsInSameRoomWithUsernames();
+    const adStarted = new Promise((resolve) => clientB.once("ad-started", resolve));
+
+    clientA.emit("ad-started", { roomCode });
+    const payload = await adStarted;
+
+    expect(payload).toEqual({ username: "HostUser" });
+  });
+
+  it("It should not echo ad-started back to the sender", async () => {
+    const roomCode = await connectTwoClientsInSameRoomWithUsernames();
+    const spy = vi.fn();
+    clientA.on("ad-started", spy);
+
+    clientA.emit("ad-started", { roomCode });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("It should broadcast ad-ended to other room members", async () => {
+    const roomCode = await connectTwoClientsInSameRoomWithUsernames();
+    const adEnded = new Promise((resolve) => clientB.once("ad-ended", resolve));
+
+    clientA.emit("ad-ended", { roomCode });
+    const payload = await adEnded;
+    expect(payload).toBeUndefined();
+  });
+
+  it("It should silently drop ad-started with no payload", async () => {
+    clientA = await createClient();
+    const created = new Promise((resolve) => clientA.once("room-created", resolve));
+    clientA.emit("create-room", { username: "SoloUser" });
+    await created;
+
+    clientA.emit("ad-started");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const health = await getHealth();
+    expect(health.status).toBe("ok");
+    expect(health.rooms).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("Leaving and Disconnecting", () => {
   let clientA;
   let clientB;

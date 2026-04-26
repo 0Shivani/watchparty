@@ -22,6 +22,11 @@ function safePayload(data) {
   return data && typeof data === "object" && !Array.isArray(data) ? data : {};
 }
 
+function sanitizeUsername(raw) {
+  if (!raw || typeof raw !== "string") return "A user";
+  return raw.trim().slice(0, 20) || "A user";
+}
+
 function generateRoomCode() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let code = "";
@@ -67,6 +72,7 @@ function leaveCurrentRoom(socket, roomsMap) {
   const room = roomsMap.get(currentRoomCode);
   if (room) {
     room.members.delete(socket.id);
+    room.usernames?.delete(socket.id);
     socket.leave(currentRoomCode);
 
     if (room.members.size === 0) {
@@ -80,6 +86,7 @@ function leaveCurrentRoom(socket, roomsMap) {
   }
 
   socket.data.roomCode = null;
+  socket.data.username = null;
 }
 
 app.get("/health", (_req, res) => {
@@ -88,21 +95,30 @@ app.get("/health", (_req, res) => {
 
 io.on("connection", (socket) => {
   socket.data.roomCode = null;
+  socket.data.username = null;
 
-  socket.on("create-room", () => {
+  socket.on("create-room", (rawData) => {
     leaveCurrentRoom(socket, rooms);
+    const { username } = safePayload(rawData);
+    const displayName = sanitizeUsername(username);
     const roomCode = createUniqueRoomCode();
-    rooms.set(roomCode, { hostId: socket.id, members: new Set([socket.id]) });
+    rooms.set(roomCode, {
+      hostId: socket.id,
+      members: new Set([socket.id]),
+      usernames: new Map([[socket.id, displayName]]),
+    });
 
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
+    socket.data.username = displayName;
     socket.emit("room-created", { roomCode });
     socket.emit("room-joined", { roomCode, memberCount: 1 });
     emitMemberUpdate(roomCode);
   });
 
   socket.on("join-room", (rawData) => {
-    const { roomCode } = safePayload(rawData);
+    const { roomCode, username } = safePayload(rawData);
+    const displayName = sanitizeUsername(username);
     if (!roomCode) {
       socket.emit("room-error", { message: "Room code is required." });
       return;
@@ -118,8 +134,11 @@ io.on("connection", (socket) => {
 
     leaveCurrentRoom(socket, rooms);
     room.members.add(socket.id);
+    room.usernames = room.usernames || new Map();
+    room.usernames.set(socket.id, displayName);
     socket.join(normalizedCode);
     socket.data.roomCode = normalizedCode;
+    socket.data.username = displayName;
 
     socket.emit("room-joined", {
       roomCode: normalizedCode,
@@ -147,6 +166,31 @@ io.on("connection", (socket) => {
     leaveCurrentRoom(socket, rooms);
   });
 
+  socket.on("ad-started", (rawData) => {
+    const { roomCode } = safePayload(rawData);
+    const normalizedCode = String(roomCode || socket.data.roomCode || "")
+      .toUpperCase()
+      .trim();
+    if (!normalizedCode || !rooms.has(normalizedCode)) return;
+    const room = rooms.get(normalizedCode);
+    if (!room || !room.members.has(socket.id)) return;
+
+    const username = socket.data.username || room.usernames?.get(socket.id) || "A user";
+    socket.to(normalizedCode).emit("ad-started", { username });
+  });
+
+  socket.on("ad-ended", (rawData) => {
+    const { roomCode } = safePayload(rawData);
+    const normalizedCode = String(roomCode || socket.data.roomCode || "")
+      .toUpperCase()
+      .trim();
+    if (!normalizedCode || !rooms.has(normalizedCode)) return;
+    const room = rooms.get(normalizedCode);
+    if (!room || !room.members.has(socket.id)) return;
+
+    socket.to(normalizedCode).emit("ad-ended");
+  });
+
   socket.on("disconnect", () => {
     const roomCode = socket.data.roomCode;
     if (!roomCode) return;
@@ -155,6 +199,7 @@ io.on("connection", (socket) => {
     if (!room) return;
 
     room.members.delete(socket.id);
+    room.usernames?.delete(socket.id);
     socket.leave(roomCode);
 
     if (room.hostId === socket.id && room.members.size > 0) {
@@ -176,6 +221,7 @@ io.on("connection", (socket) => {
     }
 
     socket.data.roomCode = null;
+    socket.data.username = null;
   });
 });
 

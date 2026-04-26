@@ -2,6 +2,38 @@ let isSyncing = false;
 let currentVideo = null;
 let lastUrl = location.href;
 const attachedVideos = new WeakSet();
+let adInProgress = false;
+let adWatcherStarted = false;
+
+function isAdPlaying() {
+  return !!(
+    document.querySelector("[class*='adContainer']") ||
+    document.querySelector("[class*='ad-overlay']")
+  );
+}
+
+function startAdWatcher() {
+  if (!document.body) return;
+  adInProgress = isAdPlaying();
+  const observer = new MutationObserver(() => {
+    const adNow = isAdPlaying();
+
+    if (adNow && !adInProgress) {
+      adInProgress = true;
+      chrome.runtime.sendMessage({ type: "AD_STARTED" });
+    } else if (!adNow && adInProgress) {
+      adInProgress = false;
+      chrome.runtime.sendMessage({ type: "AD_ENDED" });
+    }
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class"],
+  });
+}
 
 function findVideo() {
   return document.querySelector(".hotstar-player video") || document.querySelector("video");
@@ -13,6 +45,7 @@ function attachPlayerListeners(video) {
 
   const sendEvent = (type) => {
     if (isSyncing) return;
+    if (adInProgress) return;
     chrome.runtime.sendMessage({
       type: "LOCAL_EVENT",
       action: { type, currentTime: video.currentTime },
@@ -32,7 +65,8 @@ chrome.runtime.onMessage.addListener((message) => {
   const { action } = message;
   if (!action || typeof action.type !== "string") return;
 
-  if (action.type === "seek" || Math.abs(video.currentTime - action.currentTime) > 2) {
+  const hasCurrentTime = typeof action.currentTime === "number" && action.currentTime !== null;
+  if (hasCurrentTime && (action.type === "seek" || Math.abs(video.currentTime - action.currentTime) > 2)) {
     isSyncing = true;
     video.currentTime = action.currentTime;
     video.addEventListener(
@@ -70,6 +104,10 @@ function attachToPlayer() {
   if (!video || video === currentVideo) return;
   currentVideo = video;
   attachPlayerListeners(video);
+  if (!adWatcherStarted) {
+    adWatcherStarted = true;
+    startAdWatcher();
+  }
 
   const observedVideo = video;
   const videoRemovalObserver = new MutationObserver(() => {

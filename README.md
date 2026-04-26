@@ -96,6 +96,9 @@ Then in Chrome:
 - The popup must remain open during the watch session due to MV3 lifecycle constraints; if it closes, the socket disconnects.
 - Netflix and Prime Video may update player DOM structure, which can require selector updates.
 - If playback drifts, use a manual seek to re-anchor both viewers via a fresh sync event.
+- Ad detection relies on platform DOM structure which can change without notice; YouTube's `.ad-showing` class is the most stable, while Netflix/Prime/Hotstar selectors may need updates over time.
+- The extension cannot suppress ads themselves; it only pauses other members' playback during an ad break and resumes after it ends.
+- If the popup is closed during an ad break, the `ad-ended` signal may not reach the server, so users should keep the popup open during watch sessions.
 
 ## Future Improvements
 
