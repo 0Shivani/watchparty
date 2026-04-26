@@ -102,6 +102,28 @@ chrome.runtime.onMessage.addListener((message) => {
     return;
   }
 
+  if (message.type === "AD_STARTED_REMOTE") {
+    isSyncing = true;
+    const video = findVideo();
+    if (video) video.pause();
+    setTimeout(() => {
+      isSyncing = false;
+    }, 300);
+    return;
+  }
+
+  if (message.type === "AD_ENDED_REMOTE") {
+    isSyncing = true;
+    const video = findVideo();
+    if (video) {
+      video.play().catch(() => {});
+    }
+    setTimeout(() => {
+      isSyncing = false;
+    }, 300);
+    return;
+  }
+
   if (message.type === "ROOM_JOINED") {
     mountChatOverlay(message.username);
     return;

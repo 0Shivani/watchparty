@@ -1,3 +1,6 @@
+// Note: as of the offscreen document refactor, the Socket.io connection is maintained
+// by extension/src/offscreen/offscreen.js rather than the popup. Server behaviour is
+// unchanged - these tests remain valid.
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { io as Client } from "socket.io-client";
 import { httpServer } from "./index.js";

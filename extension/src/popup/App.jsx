@@ -1,13 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { io } from "socket.io-client";
+import { useEffect, useMemo, useState } from "react";
 import "./popup.css";
-
-const STORAGE_KEYS = {
-  serverUrl: "serverUrl",
-  roomCode: "roomCode",
-  inRoom: "inRoom",
-  username: "username",
-};
 
 function formatTime(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -27,312 +19,141 @@ function formatAction(action) {
 }
 
 export default function App() {
-  const socketRef = useRef(null);
-  const connectingRef = useRef(false);
-  const autoRejoinInFlightRef = useRef(false);
-  const latestSessionRef = useRef({
-    serverUrl: "",
-    roomCode: "",
-    inRoom: false,
-    username: "",
-  });
-
-  const [serverUrlInput, setServerUrlInput] = useState("");
-  const [savedServerUrl, setSavedServerUrl] = useState("");
-  const [joinCodeInput, setJoinCodeInput] = useState("");
-  const [roomCode, setRoomCode] = useState("");
-  const [memberCount, setMemberCount] = useState(1);
-  const [lastAction, setLastAction] = useState(null);
   const [connectionState, setConnectionState] = useState("disconnected");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
-  const [expiredBanner, setExpiredBanner] = useState(false);
-  const [errorText, setErrorText] = useState("");
+
+  const [serverUrl, setServerUrl] = useState("");
+  const [serverUrlInput, setServerUrlInput] = useState("");
+
+  const [roomCode, setRoomCode] = useState("");
+  const [roomCodeInput, setRoomCodeInput] = useState("");
   const [inRoom, setInRoom] = useState(false);
+  const [memberCount, setMemberCount] = useState(0);
+
   const [username, setUsername] = useState("");
+  const [usernameInput, setUsernameInput] = useState("");
   const [usernameError, setUsernameError] = useState("");
+
+  const [errorText, setErrorText] = useState("");
+  const [expiredBanner, setExpiredBanner] = useState(false);
   const [adBanner, setAdBanner] = useState(null);
+  const [lastSync, setLastSync] = useState(null);
 
   const uiState = useMemo(() => {
-    if (!savedServerUrl) return "setup";
+    if (!serverUrl) return "setup";
     if (inRoom) return "in-room";
     return "lobby";
-  }, [savedServerUrl, inRoom]);
+  }, [serverUrl, inRoom]);
 
   useEffect(() => {
-    latestSessionRef.current = {
-      serverUrl: savedServerUrl,
-      roomCode,
-      inRoom,
-      username,
-    };
-  }, [savedServerUrl, roomCode, inRoom, username]);
-
-  async function persistSession(next) {
-    let resolvedUsername = next.username;
-    if (resolvedUsername == null) {
-      const stored = await chrome.storage.local.get([STORAGE_KEYS.username]);
-      resolvedUsername = stored[STORAGE_KEYS.username] ?? latestSessionRef.current.username;
-    }
-
-    await chrome.runtime.sendMessage({
-      type: "SET_SESSION_STATE",
-      payload: {
-        serverUrl: next.serverUrl ?? latestSessionRef.current.serverUrl,
-        roomCode: next.roomCode ?? latestSessionRef.current.roomCode,
-        inRoom: next.inRoom ?? latestSessionRef.current.inRoom,
-        username: String(resolvedUsername || "").trim(),
-      },
+    chrome.runtime.sendMessage({ type: "POPUP_GET_STATE" }, (response) => {
+      if (response?.sessionState) {
+        applyStateSnapshot(response.sessionState);
+      }
     });
+
+    const listener = (message) => {
+      if (message.type === "STATE_UPDATE") {
+        applyStateSnapshot(message.sessionState || {});
+        if (message.socketEvent) {
+          handleSocketEvent(message.socketEvent);
+        }
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, [username, usernameInput]);
+
+  function applyStateSnapshot(snapshot) {
+    if (snapshot.serverUrl != null) {
+      setServerUrl(snapshot.serverUrl);
+      setServerUrlInput(snapshot.serverUrl);
+    }
+    if (snapshot.connectionState != null) setConnectionState(snapshot.connectionState);
+    if (snapshot.reconnectAttempt != null) setReconnectAttempt(snapshot.reconnectAttempt);
+    if (snapshot.roomCode != null) {
+      setRoomCode(snapshot.roomCode);
+      setRoomCodeInput(snapshot.roomCode);
+    }
+    if (snapshot.inRoom != null) setInRoom(Boolean(snapshot.inRoom));
+    if (snapshot.memberCount != null) setMemberCount(snapshot.memberCount);
+    if (snapshot.username != null) {
+      setUsername(snapshot.username);
+      setUsernameInput(snapshot.username);
+    }
   }
 
-  async function autoRejoinRoom() {
-    const socket = socketRef.current;
-    if (!socket?.connected) return;
-
-    const stored = await chrome.storage.local.get([
-      STORAGE_KEYS.roomCode,
-      STORAGE_KEYS.inRoom,
-      STORAGE_KEYS.username,
-    ]);
-
-    if (!stored[STORAGE_KEYS.inRoom] || !stored[STORAGE_KEYS.roomCode]) {
-      setConnectionState("connected");
-      return;
-    }
-
-    const storedRoomCode = String(stored[STORAGE_KEYS.roomCode] || "")
-      .toUpperCase()
-      .trim();
-    if (!storedRoomCode) {
-      setConnectionState("connected");
-      return;
-    }
-
-    const onRoomJoined = () => {
-      autoRejoinInFlightRef.current = false;
-      socket.off("room-error", onRoomError);
-      setConnectionState("connected");
-      setReconnectAttempt(0);
-      setExpiredBanner(false);
-      setErrorText("");
-    };
-
-    const onRoomError = async () => {
-      autoRejoinInFlightRef.current = false;
-      socket.off("room-joined", onRoomJoined);
-      setConnectionState("connected");
-      setRoomCode("");
-      setInRoom(false);
-      setReconnectAttempt(0);
-      setErrorText("");
-      await chrome.storage.local.set({
-        [STORAGE_KEYS.roomCode]: "",
-        [STORAGE_KEYS.inRoom]: false,
-      });
-      setExpiredBanner(true);
-      setTimeout(() => setExpiredBanner(false), 5000);
-    };
-
-    autoRejoinInFlightRef.current = true;
-    socket.emit("join-room", {
-      roomCode: storedRoomCode,
-      username: String(stored[STORAGE_KEYS.username] || username || "").trim(),
-    });
-    socket.once("room-joined", onRoomJoined);
-    socket.once("room-error", onRoomError);
-  }
-
-  function bindSocket(socket) {
-    const manager = socket.io;
-
-    socket.on("connect", () => {
-      setConnectionState("connected");
-      setReconnectAttempt(0);
-      setErrorText("");
-    });
-
-    socket.on("disconnect", () => {
-      setConnectionState("disconnected");
-    });
-
-    manager.on("reconnect_attempt", (attempt) => {
-      setConnectionState("reconnecting");
-      setReconnectAttempt(attempt);
-    });
-    // In socket.io-client v4, reconnection lifecycle events (reconnect_attempt,
-    // reconnect, reconnect_failed) are emitted by the Manager, not the Socket instance.
-    manager.on("reconnect", () => {
-      setConnectionState("rejoining");
-      void autoRejoinRoom();
-    });
-
-    manager.on("reconnect_failed", () => {
-      setConnectionState("failed");
-    });
-
-    socket.on("sync-event", async ({ action }) => {
-      setLastAction(action);
-      await chrome.runtime.sendMessage({ type: "APPLY_SYNC", action });
-    });
-
-    socket.on("room-created", async ({ roomCode: createdRoomCode }) => {
-      setRoomCode(createdRoomCode);
+  function handleSocketEvent({ event, payload }) {
+    if (event === "room-created") {
+      const createdCode = payload?.roomCode || "";
+      const activeUsername = usernameInput.trim() || username.trim();
+      setRoomCode(createdCode);
+      setRoomCodeInput(createdCode);
+      setUsername(activeUsername);
       setInRoom(true);
-      setMemberCount(1);
-      await persistSession({ roomCode: createdRoomCode, inRoom: true });
-    });
-
-    socket.on("room-joined", async ({ roomCode: joinedRoomCode, memberCount: count }) => {
-      setRoomCode(joinedRoomCode);
-      setInRoom(true);
-      setMemberCount(count);
-      setConnectionState("connected");
-      setReconnectAttempt(0);
-      setExpiredBanner(false);
       setErrorText("");
-      await persistSession({ roomCode: joinedRoomCode, inRoom: true });
-    });
-
-    socket.on("member-update", ({ memberCount: count }) => {
-      setMemberCount(count);
-    });
-
-    socket.on("chat-message", ({ username: fromUser, text, timestamp }) => {
       chrome.runtime.sendMessage({
-        type: "INCOMING_CHAT",
-        payload: { username: fromUser, text, timestamp },
+        type: "POPUP_JOINED_ROOM",
+        roomCode: createdCode,
+        username: activeUsername,
       });
-    });
-
-    socket.on("ad-started", ({ username: eventUsername }) => {
-      setAdBanner({ username: eventUsername || "A user" });
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, {
-            type: "APPLY_SYNC",
-            action: { type: "pause", currentTime: null },
-          });
-        }
-      });
-    });
-
-    socket.on("ad-ended", () => {
-      setAdBanner(null);
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, {
-            type: "APPLY_SYNC",
-            action: { type: "play", currentTime: null },
-          });
-        }
-      });
-    });
-
-    socket.on("room-error", ({ message }) => {
-      if (autoRejoinInFlightRef.current) return;
-      setErrorText(message || "Something went wrong.");
-    });
-  }
-
-  function connectSocket(url) {
-    if (!url || connectingRef.current) return;
-    if (socketRef.current?.connected || socketRef.current?.active) return;
-
-    connectingRef.current = true;
-    const socket = io(url, {
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 15000,
-      randomizationFactor: 0.4,
-      timeout: 10000,
-    });
-    socketRef.current = socket;
-    bindSocket(socket);
-    connectingRef.current = false;
-  }
-
-  useEffect(() => {
-    let mounted = true;
-
-    chrome.storage.local
-      .get([STORAGE_KEYS.serverUrl, STORAGE_KEYS.roomCode, STORAGE_KEYS.inRoom, STORAGE_KEYS.username])
-      .then((data) => {
-        if (!mounted) return;
-        const restoredUrl = String(data[STORAGE_KEYS.serverUrl] || "");
-        const restoredRoom = String(data[STORAGE_KEYS.roomCode] || "");
-        const restoredInRoom = Boolean(data[STORAGE_KEYS.inRoom]);
-        const restoredUsername = String(data[STORAGE_KEYS.username] || "");
-        setSavedServerUrl(restoredUrl);
-        setServerUrlInput(restoredUrl);
-        setRoomCode(restoredRoom);
-        setInRoom(restoredInRoom);
-        setUsername(restoredUsername);
-        if (restoredUrl) connectSocket(restoredUrl);
-      });
-
-    const onMessage = (message) => {
-      if (message.type === "LOCAL_EVENT") {
-        if (!socketRef.current || !inRoom || !roomCode) return;
-
-        socketRef.current.emit("sync-event", {
-          roomCode,
-          action: message.action,
-        });
-        setLastAction(message.action);
-        return;
-      }
-
-      if (message.type === "AD_STARTED") {
-        if (!socketRef.current?.connected || !inRoom || !roomCode) return;
-        chrome.storage.local.get([STORAGE_KEYS.roomCode]).then((stored) => {
-          socketRef.current?.emit("ad-started", { roomCode: stored[STORAGE_KEYS.roomCode] });
-        });
-        return;
-      }
-
-      if (message.type === "AD_ENDED") {
-        if (!socketRef.current?.connected || !inRoom || !roomCode) return;
-        chrome.storage.local.get([STORAGE_KEYS.roomCode]).then((stored) => {
-          socketRef.current?.emit("ad-ended", { roomCode: stored[STORAGE_KEYS.roomCode] });
-        });
-        return;
-      }
-
-      if (message.type === "CHAT_SEND") {
-        if (!socketRef.current?.connected || !inRoom || !roomCode) return;
-        chrome.storage.local.get([STORAGE_KEYS.roomCode], (stored) => {
-          socketRef.current?.emit("chat-message", {
-            roomCode: stored[STORAGE_KEYS.roomCode],
-            text: message.payload?.text,
-          });
-        });
-      }
-    };
-
-    chrome.runtime.onMessage.addListener(onMessage);
-    return () => {
-      mounted = false;
-      chrome.runtime.onMessage.removeListener(onMessage);
-    };
-  }, [inRoom, roomCode]);
-
-  async function saveAndConnect() {
-    const normalized = serverUrlInput.trim();
-    if (!normalized) {
-      setErrorText("Please enter a server URL.");
       return;
     }
 
-    setSavedServerUrl(normalized);
-    setErrorText("");
-    await chrome.storage.local.set({ [STORAGE_KEYS.serverUrl]: normalized });
-    await persistSession({ serverUrl: normalized });
-    connectSocket(normalized);
+    if (event === "room-joined") {
+      const joinedCode = payload?.roomCode || "";
+      const activeUsername = usernameInput.trim() || username.trim();
+      setRoomCode(joinedCode);
+      setRoomCodeInput(joinedCode);
+      setUsername(activeUsername);
+      setInRoom(true);
+      setMemberCount(payload?.memberCount || 0);
+      setErrorText("");
+      chrome.runtime.sendMessage({
+        type: "POPUP_JOINED_ROOM",
+        roomCode: joinedCode,
+        username: activeUsername,
+      });
+      return;
+    }
+
+    if (event === "room-error") {
+      const lower = String(payload?.message || "").toLowerCase();
+      if (lower.includes("not found") || lower.includes("expired")) {
+        setExpiredBanner(true);
+        setTimeout(() => setExpiredBanner(false), 5000);
+        setInRoom(false);
+        setRoomCode("");
+        setRoomCodeInput("");
+      } else {
+        setErrorText(payload?.message || "An error occurred.");
+      }
+      return;
+    }
+
+    if (event === "member-update") {
+      setMemberCount(payload?.memberCount || 0);
+      return;
+    }
+
+    if (event === "sync-event") {
+      setLastSync(payload?.action || null);
+      return;
+    }
+
+    if (event === "ad-started") {
+      setAdBanner({ username: payload?.username || "A user" });
+      return;
+    }
+
+    if (event === "ad-ended") {
+      setAdBanner(null);
+    }
   }
 
   function validateUsername() {
-    const normalized = String(username || "").trim();
+    const normalized = String(usernameInput || "").trim();
     if (!normalized || normalized.length < 1) {
       setUsernameError("Please enter a display name.");
       return false;
@@ -344,77 +165,75 @@ export default function App() {
     return true;
   }
 
-  async function createRoom() {
-    if (!socketRef.current?.connected) {
-      setErrorText("Not connected to server.");
-      return;
-    }
-    if (!validateUsername()) return;
+  function handleSaveServer() {
+    if (!serverUrlInput.trim()) return;
+    const normalizedServerUrl = serverUrlInput.trim();
+    chrome.runtime.sendMessage({
+      type: "POPUP_CONNECT",
+      serverUrl: normalizedServerUrl,
+    });
+    setServerUrl(normalizedServerUrl);
+    setConnectionState("connecting");
     setErrorText("");
-    const normalizedUsername = username.trim();
-    await chrome.storage.local.set({ [STORAGE_KEYS.username]: normalizedUsername });
-    socketRef.current.emit("create-room", { username: normalizedUsername });
   }
 
-  async function joinRoom() {
-    const normalized = joinCodeInput.trim().toUpperCase();
-    if (normalized.length !== 6) {
-      setErrorText("Room code must be 6 characters.");
-      return;
-    }
-    if (!socketRef.current?.connected) {
-      setErrorText("Not connected to server.");
-      return;
-    }
+  function handleCreateRoom() {
     if (!validateUsername()) return;
-
+    const normalizedUsername = usernameInput.trim();
+    setUsername(normalizedUsername);
+    setUsernameError("");
     setErrorText("");
-    const normalizedUsername = username.trim();
-    await chrome.storage.local.set({ [STORAGE_KEYS.username]: normalizedUsername });
-    socketRef.current.emit("join-room", { roomCode: normalized, username: normalizedUsername });
+    chrome.runtime.sendMessage({
+      type: "POPUP_EMIT",
+      event: "create-room",
+      payload: { username: normalizedUsername },
+    });
   }
 
-  async function leaveRoom() {
-    if (socketRef.current?.connected && roomCode) {
-      socketRef.current.emit("leave-room", { roomCode });
-      socketRef.current.disconnect();
-      socketRef.current = null;
-    }
+  function handleJoinRoom() {
+    if (!validateUsername()) return;
+    if (!roomCodeInput.trim()) return;
+    const normalizedUsername = usernameInput.trim();
+    setUsername(normalizedUsername);
+    setUsernameError("");
+    setErrorText("");
+    chrome.runtime.sendMessage({
+      type: "POPUP_EMIT",
+      event: "join-room",
+      payload: { roomCode: roomCodeInput.toUpperCase().trim(), username: normalizedUsername },
+    });
+  }
 
-    setConnectionState("disconnected");
-    setReconnectAttempt(0);
+  function handleLeaveRoom() {
+    chrome.runtime.sendMessage({
+      type: "POPUP_EMIT",
+      event: "leave-room",
+      payload: { roomCode },
+    });
+    chrome.runtime.sendMessage({ type: "POPUP_LEFT_ROOM" });
     setInRoom(false);
     setRoomCode("");
-    setJoinCodeInput("");
-    setMemberCount(1);
+    setRoomCodeInput("");
+    setMemberCount(0);
     setAdBanner(null);
-    await chrome.runtime.sendMessage({ type: "CLEAR_ROOM_STATE" });
-    if (savedServerUrl) connectSocket(savedServerUrl);
+    setLastSync(null);
   }
 
-  async function changeServer() {
-    if (socketRef.current?.connected) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
-    }
-    setSavedServerUrl("");
+  function handleChangeServer() {
+    chrome.runtime.sendMessage({ type: "POPUP_DISCONNECT" });
+    setServerUrl("");
     setServerUrlInput("");
-    setInRoom(false);
-    setRoomCode("");
-    setJoinCodeInput("");
-    setMemberCount(1);
-    setLastAction(null);
-    setErrorText("");
     setConnectionState("disconnected");
     setReconnectAttempt(0);
+    setInRoom(false);
+    setRoomCode("");
+    setRoomCodeInput("");
+    setMemberCount(0);
+    setLastSync(null);
+    setErrorText("");
     setExpiredBanner(false);
     setAdBanner(null);
-    await chrome.storage.local.set({
-      [STORAGE_KEYS.serverUrl]: "",
-      [STORAGE_KEYS.roomCode]: "",
-      [STORAGE_KEYS.inRoom]: false,
-    });
-    await chrome.runtime.sendMessage({ type: "CLEAR_ROOM_STATE" });
+    setUsernameError("");
   }
 
   async function copyCode() {
@@ -445,7 +264,7 @@ export default function App() {
         </div>
       )}
 
-      {connectionState === "rejoining" && (
+      {connectionState === "reconnected" && (
         <div className="banner banner--warning">
           <span className="spinner" />
           Back online - rejoining room...
@@ -470,7 +289,7 @@ export default function App() {
             value={serverUrlInput}
             onChange={(e) => setServerUrlInput(e.target.value)}
           />
-          <button className="btn primary" onClick={saveAndConnect}>
+          <button className="btn primary" onClick={handleSaveServer}>
             Save & Connect
           </button>
           <p className="helper">Run the server locally or paste your ngrok URL.</p>
@@ -490,15 +309,15 @@ export default function App() {
               type="text"
               maxLength={20}
               placeholder="e.g. Shivani"
-              value={username}
+              value={usernameInput}
               onChange={(e) => {
-                setUsername(e.target.value.trim());
+                setUsernameInput(e.target.value);
                 setUsernameError("");
               }}
             />
             {usernameError && <span className="field__error">{usernameError}</span>}
           </div>
-          <button className="btn primary" onClick={createRoom}>
+          <button className="btn primary" onClick={handleCreateRoom}>
             Create Room
           </button>
 
@@ -507,14 +326,14 @@ export default function App() {
           <input
             placeholder="ROOM12"
             maxLength={6}
-            value={joinCodeInput}
-            onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+            value={roomCodeInput}
+            onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
           />
-          <button className="btn" onClick={joinRoom}>
+          <button className="btn" onClick={handleJoinRoom}>
             Join Room
           </button>
 
-          <button className="link-btn" onClick={changeServer}>
+          <button className="link-btn" onClick={handleChangeServer}>
             Change server
           </button>
         </section>
@@ -532,8 +351,8 @@ export default function App() {
             Watching as <strong>{username}</strong>
           </p>
           <div className="meta">👥 {memberCount} in room</div>
-          <div className="sync-pill">{formatAction(lastAction)}</div>
-          <button className="btn danger-outline" onClick={leaveRoom}>
+          <div className="sync-pill">{formatAction(lastSync)}</div>
+          <button className="btn danger-outline" onClick={handleLeaveRoom}>
             Leave Room
           </button>
         </section>

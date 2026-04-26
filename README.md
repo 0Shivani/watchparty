@@ -33,12 +33,16 @@ Browser Tab (YouTube/Netflix/Prime/Hotstar)
         ↕
  Service Worker (MV3 bridge + storage)
         ↕
-   Popup (React + socket.io-client)
+Offscreen Document (persistent socket client)
+        ↕
+   Popup (React UI only)
         ↕
  Socket.io Server (Express + in-memory rooms)
         ↕
  Other User's identical stack
 ```
+
+**Offscreen Document:** The Socket.io connection lives in a persistent Chrome Offscreen Document (`offscreen.js`) rather than the popup. Closing the popup does not disconnect the session, and the socket remains alive while Chrome is open and the user is in a room. This requires Chrome 109 or later.
 
 ## Tech Stack
 
@@ -76,6 +80,9 @@ npm install
 npm run build
 ```
 
+Minimum requirement:
+- Chrome 109 or later (required for Offscreen Document API)
+
 Then in Chrome:
 - Open `chrome://extensions`
 - Enable Developer Mode
@@ -93,12 +100,10 @@ Then in Chrome:
 
 ## Known Limitations
 
-- The popup must remain open during the watch session due to MV3 lifecycle constraints; if it closes, the socket disconnects.
 - Netflix and Prime Video may update player DOM structure, which can require selector updates.
 - If playback drifts, use a manual seek to re-anchor both viewers via a fresh sync event.
 - Ad detection relies on platform DOM structure which can change without notice; YouTube's `.ad-showing` class is the most stable, while Netflix/Prime/Hotstar selectors may need updates over time.
 - The extension cannot suppress ads themselves; it only pauses other members' playback during an ad break and resumes after it ends.
-- If the popup is closed during an ad break, the `ad-ended` signal may not reach the server, so users should keep the popup open during watch sessions.
 - Chat UI is injected into the video page DOM. On strict CSP platforms (notably Netflix), `backdrop-filter` can be ignored; chat remains visible and functional without blur.
 - Chat overlay is mounted per tab. If the same platform is open in multiple tabs, only the active tab at join time gets the overlay and another tab may need refresh after joining.
 - Chat messages are not persisted. Rejoining a room starts a fresh local chat history.
