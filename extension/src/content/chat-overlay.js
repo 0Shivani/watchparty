@@ -105,9 +105,10 @@ function bindChatEvents(input, sendBtn, posBtn, closeBtn, panel, panelMessages) 
   };
 
   input.addEventListener("keydown", (event) => {
+    // Prevent host page keyboard shortcuts (play/pause/seek/fullscreen) while typing in chat.
+    event.stopPropagation();
     if (event.key === "Enter") {
       event.preventDefault();
-      event.stopPropagation();
       sendMessage();
     }
   });

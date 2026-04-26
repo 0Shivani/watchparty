@@ -30,6 +30,12 @@ export default function App() {
   const socketRef = useRef(null);
   const connectingRef = useRef(false);
   const autoRejoinInFlightRef = useRef(false);
+  const latestSessionRef = useRef({
+    serverUrl: "",
+    roomCode: "",
+    inRoom: false,
+    username: "",
+  });
 
   const [serverUrlInput, setServerUrlInput] = useState("");
   const [savedServerUrl, setSavedServerUrl] = useState("");
@@ -52,14 +58,29 @@ export default function App() {
     return "lobby";
   }, [savedServerUrl, inRoom]);
 
+  useEffect(() => {
+    latestSessionRef.current = {
+      serverUrl: savedServerUrl,
+      roomCode,
+      inRoom,
+      username,
+    };
+  }, [savedServerUrl, roomCode, inRoom, username]);
+
   async function persistSession(next) {
+    let resolvedUsername = next.username;
+    if (resolvedUsername == null) {
+      const stored = await chrome.storage.local.get([STORAGE_KEYS.username]);
+      resolvedUsername = stored[STORAGE_KEYS.username] ?? latestSessionRef.current.username;
+    }
+
     await chrome.runtime.sendMessage({
       type: "SET_SESSION_STATE",
       payload: {
-        serverUrl: next.serverUrl ?? savedServerUrl,
-        roomCode: next.roomCode ?? roomCode,
-        inRoom: next.inRoom ?? inRoom,
-        username: next.username ?? username,
+        serverUrl: next.serverUrl ?? latestSessionRef.current.serverUrl,
+        roomCode: next.roomCode ?? latestSessionRef.current.roomCode,
+        inRoom: next.inRoom ?? latestSessionRef.current.inRoom,
+        username: String(resolvedUsername || "").trim(),
       },
     });
   }
