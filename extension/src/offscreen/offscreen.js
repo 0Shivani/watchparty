@@ -7,6 +7,20 @@ function toServiceWorker(type, payload = {}) {
   chrome.runtime.sendMessage({ type, ...payload });
 }
 
+function isNgrokUrl(serverUrl) {
+  try {
+    const { hostname } = new URL(serverUrl);
+    return (
+      hostname.endsWith(".ngrok-free.app") ||
+      hostname.endsWith(".ngrok-free.dev") ||
+      hostname.endsWith(".ngrok.app") ||
+      hostname.endsWith(".ngrok.io")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function connectSocket(serverUrl) {
   if (socket?.connected) return;
 
@@ -15,14 +29,22 @@ function connectSocket(serverUrl) {
     socket.disconnect();
   }
 
-  socket = io(serverUrl, {
+  const socketOptions = {
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 15000,
     randomizationFactor: 0.4,
     timeout: 10000,
-  });
+  };
+
+  // ngrok free tunnels can block Socket.IO polling from browser clients.
+  // WebSocket-only transport avoids the warning/interstitial path.
+  if (isNgrokUrl(serverUrl)) {
+    socketOptions.transports = ["websocket"];
+  }
+
+  socket = io(serverUrl, socketOptions);
 
   reconnectManager = socket.io;
 
@@ -44,6 +66,13 @@ function connectSocket(serverUrl) {
 
   reconnectManager.on("reconnect_failed", () => {
     toServiceWorker("SOCKET_STATE", { state: "failed" });
+  });
+
+  socket.on("connect_error", (error) => {
+    toServiceWorker("SOCKET_STATE", {
+      state: "reconnecting",
+      error: error?.message || "Connection failed",
+    });
   });
 
   socket.on("room-created", (payload) => {

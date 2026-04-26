@@ -10,7 +10,7 @@ let currentUsername = "";
 let outsideClickHandler = null;
 let openPanelHandler = null;
 
-export function mountChatOverlay(username) {
+function mountChatOverlay(username) {
   if (overlayMounted && document.getElementById(OVERLAY_ID)) return;
   if (document.getElementById(OVERLAY_ID)) {
     overlayMounted = true;
@@ -58,7 +58,7 @@ export function mountChatOverlay(username) {
   bindChatEvents(input, sendBtn, posBtn, closeBtn, panel, panelMessages);
 }
 
-export function unmountChatOverlay() {
+function unmountChatOverlay() {
   const root = document.getElementById(OVERLAY_ID);
   if (root) root.remove();
   if (outsideClickHandler) {
@@ -73,7 +73,7 @@ export function unmountChatOverlay() {
   messageHistory = [];
 }
 
-export function receiveMessage({ username, text, timestamp }) {
+function receiveMessage({ username, text, timestamp }) {
   const msg = { username, text, timestamp: timestamp || Date.now() };
   messageHistory = [...messageHistory, msg].slice(-MAX_HISTORY);
   showToast(msg);
@@ -372,4 +372,12 @@ function injectStyles() {
   if (document.head) {
     document.head.appendChild(style);
   }
+}
+
+if (typeof window !== "undefined") {
+  window.WatchPartyChat = {
+    mountChatOverlay,
+    unmountChatOverlay,
+    receiveMessage,
+  };
 }

@@ -56,11 +56,27 @@ function toPopup(message) {
   });
 }
 
-function toActiveTab(message) {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0]?.id) {
-      chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
-    }
+function isSupportedPlatformUrl(url) {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return (
+      hostname.includes("youtube.com") ||
+      hostname.includes("netflix.com") ||
+      hostname.includes("primevideo.com") ||
+      hostname.includes("hotstar.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function toSupportedTabs(message) {
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach((tab) => {
+      if (!tab?.id || !isSupportedPlatformUrl(tab.url)) return;
+      chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+    });
   });
 }
 
@@ -134,7 +150,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       username: message.username,
     }).then(() => {
       chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.4 });
-      toActiveTab({ type: "ROOM_JOINED", username: message.username });
+      toSupportedTabs({ type: "ROOM_JOINED", username: message.username });
     });
     return;
   }
@@ -142,7 +158,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "POPUP_LEFT_ROOM") {
     persistSession({ roomCode: "", inRoom: false }).then(() => {
       chrome.alarms.clear(ALARM_NAME);
-      toActiveTab({ type: "ROOM_LEFT" });
+      toSupportedTabs({ type: "ROOM_LEFT" });
     });
     return;
   }
@@ -152,7 +168,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.alarms.clear(ALARM_NAME);
       toOffscreen({ type: "OFFSCREEN_DISCONNECT" });
       await closeOffscreenDocument();
-      toActiveTab({ type: "ROOM_LEFT" });
+      toSupportedTabs({ type: "ROOM_LEFT" });
     });
     return;
   }
@@ -219,23 +235,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (event === "sync-event") {
-      toActiveTab({ type: "APPLY_SYNC", action: payload.action });
+      toSupportedTabs({ type: "APPLY_SYNC", action: payload.action });
     }
 
     if (event === "ad-started") {
-      toActiveTab({ type: "AD_STARTED_REMOTE", username: payload.username });
+      toSupportedTabs({ type: "AD_STARTED_REMOTE", username: payload.username });
       toPopup({ type: "STATE_UPDATE", sessionState: { ...sessionState }, socketEvent: { event, payload } });
       return;
     }
 
     if (event === "ad-ended") {
-      toActiveTab({ type: "AD_ENDED_REMOTE" });
+      toSupportedTabs({ type: "AD_ENDED_REMOTE" });
       toPopup({ type: "STATE_UPDATE", sessionState: { ...sessionState }, socketEvent: { event, payload } });
       return;
     }
 
     if (event === "chat-message") {
-      toActiveTab({ type: "INCOMING_CHAT", payload });
+      toSupportedTabs({ type: "INCOMING_CHAT", payload });
     }
 
     toPopup({

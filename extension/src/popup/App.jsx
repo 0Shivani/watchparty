@@ -63,7 +63,7 @@ export default function App() {
 
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
-  }, [username, usernameInput]);
+  }, []);
 
   function applyStateSnapshot(snapshot) {
     if (snapshot.serverUrl != null) {
@@ -74,13 +74,11 @@ export default function App() {
     if (snapshot.reconnectAttempt != null) setReconnectAttempt(snapshot.reconnectAttempt);
     if (snapshot.roomCode != null) {
       setRoomCode(snapshot.roomCode);
-      setRoomCodeInput(snapshot.roomCode);
     }
     if (snapshot.inRoom != null) setInRoom(Boolean(snapshot.inRoom));
     if (snapshot.memberCount != null) setMemberCount(snapshot.memberCount);
     if (snapshot.username != null) {
       setUsername(snapshot.username);
-      setUsernameInput(snapshot.username);
     }
   }
 

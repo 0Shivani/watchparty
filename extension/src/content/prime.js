@@ -1,4 +1,9 @@
-import { mountChatOverlay, unmountChatOverlay, receiveMessage } from "./chat-overlay.js";
+const {
+  mountChatOverlay = () => {},
+  unmountChatOverlay = () => {},
+  receiveMessage = () => {},
+} =
+  window.WatchPartyChat || {};
 
 let isSyncing = false;
 let currentVideo = null;

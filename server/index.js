@@ -13,6 +13,7 @@ app.use(cors({ origin: "*" }));
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: "*" },
+  transports: ["websocket", "polling"]
 });
 
 const rooms = new Map();
