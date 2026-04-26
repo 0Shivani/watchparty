@@ -283,6 +283,97 @@ describe("Sync Events", () => {
   });
 });
 
+describe("Chat Messages", () => {
+  let clientA;
+  let clientB;
+
+  afterEach(() => {
+    [clientA, clientB].forEach((c) => {
+      if (c?.connected) {
+        c.emit("leave-room", {});
+        c.disconnect();
+      }
+    });
+    clientA = undefined;
+    clientB = undefined;
+  });
+
+  async function connectTwoClientsInSameRoomWithUsernames() {
+    clientA = await createClient();
+    clientB = await createClient();
+
+    const created = new Promise((resolve) => clientA.once("room-created", resolve));
+    clientA.emit("create-room", { username: "HostUser" });
+    const { roomCode } = await created;
+
+    const joined = new Promise((resolve) => clientB.once("room-joined", resolve));
+    clientB.emit("join-room", { roomCode, username: "GuestUser" });
+    await joined;
+
+    return roomCode;
+  }
+
+  it("It should broadcast a chat message to other room members", async () => {
+    const roomCode = await connectTwoClientsInSameRoomWithUsernames();
+    const chatMessage = new Promise((resolve) => clientB.once("chat-message", resolve));
+
+    clientA.emit("chat-message", { roomCode, text: "hello" });
+    const payload = await chatMessage;
+
+    expect(payload).toMatchObject({ username: "HostUser", text: "hello" });
+    expect(typeof payload.timestamp).toBe("number");
+  });
+
+  it("It should not echo chat-message back to the sender", async () => {
+    const roomCode = await connectTwoClientsInSameRoomWithUsernames();
+    const spy = vi.fn();
+    clientA.on("chat-message", spy);
+
+    clientA.emit("chat-message", { roomCode, text: "hello" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("It should truncate messages over 200 characters", async () => {
+    const roomCode = await connectTwoClientsInSameRoomWithUsernames();
+    const chatMessage = new Promise((resolve) => clientB.once("chat-message", resolve));
+    const longMessage = "x".repeat(300);
+
+    clientA.emit("chat-message", { roomCode, text: longMessage });
+    const payload = await chatMessage;
+
+    expect(payload.text.length).toBeLessThanOrEqual(200);
+  });
+
+  it("It should silently drop a chat-message with no text", async () => {
+    clientA = await createClient();
+    const created = new Promise((resolve) => clientA.once("room-created", resolve));
+    clientA.emit("create-room", { username: "SoloUser" });
+    const { roomCode } = await created;
+
+    clientA.emit("chat-message", { roomCode, text: "" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const health = await getHealth();
+    expect(health.status).toBe("ok");
+    expect(health.rooms).toBeGreaterThanOrEqual(1);
+  });
+
+  it("It should silently drop a chat-message with no payload", async () => {
+    clientA = await createClient();
+    const created = new Promise((resolve) => clientA.once("room-created", resolve));
+    clientA.emit("create-room", { username: "SoloUser" });
+    await created;
+
+    clientA.emit("chat-message");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const health = await getHealth();
+    expect(health.status).toBe("ok");
+  });
+});
+
 describe("Ad Detection Events", () => {
   let clientA;
   let clientB;

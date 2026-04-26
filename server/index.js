@@ -157,6 +157,30 @@ io.on("connection", (socket) => {
     socket.to(normalizedCode).emit("sync-event", { action });
   });
 
+  socket.on("chat-message", (rawData) => {
+    const { roomCode, text } = safePayload(rawData);
+    const normalizedCode = String(roomCode || socket.data.roomCode || "")
+      .toUpperCase()
+      .trim();
+    if (!normalizedCode || !rooms.has(normalizedCode)) return;
+
+    const room = rooms.get(normalizedCode);
+    if (!room || !room.members.has(socket.id)) return;
+
+    if (!text || typeof text !== "string") return;
+    const sanitizedText = text.trim().slice(0, 200);
+    if (!sanitizedText) return;
+
+    const username = socket.data.username || "A user";
+    const timestamp = Date.now();
+
+    socket.to(normalizedCode).emit("chat-message", {
+      username,
+      text: sanitizedText,
+      timestamp,
+    });
+  });
+
   socket.on("leave-room", (rawData) => {
     const { roomCode } = safePayload(rawData);
     const normalizedCode = String(roomCode || socket.data.roomCode || "")

@@ -59,6 +59,7 @@ export default function App() {
         serverUrl: next.serverUrl ?? savedServerUrl,
         roomCode: next.roomCode ?? roomCode,
         inRoom: next.inRoom ?? inRoom,
+        username: next.username ?? username,
       },
     });
   }
@@ -175,6 +176,13 @@ export default function App() {
       setMemberCount(count);
     });
 
+    socket.on("chat-message", ({ username: fromUser, text, timestamp }) => {
+      chrome.runtime.sendMessage({
+        type: "INCOMING_CHAT",
+        payload: { username: fromUser, text, timestamp },
+      });
+    });
+
     socket.on("ad-started", ({ username: eventUsername }) => {
       setAdBanner({ username: eventUsername || "A user" });
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -266,6 +274,17 @@ export default function App() {
         if (!socketRef.current?.connected || !inRoom || !roomCode) return;
         chrome.storage.local.get([STORAGE_KEYS.roomCode]).then((stored) => {
           socketRef.current?.emit("ad-ended", { roomCode: stored[STORAGE_KEYS.roomCode] });
+        });
+        return;
+      }
+
+      if (message.type === "CHAT_SEND") {
+        if (!socketRef.current?.connected || !inRoom || !roomCode) return;
+        chrome.storage.local.get([STORAGE_KEYS.roomCode], (stored) => {
+          socketRef.current?.emit("chat-message", {
+            roomCode: stored[STORAGE_KEYS.roomCode],
+            text: message.payload?.text,
+          });
         });
       }
     };

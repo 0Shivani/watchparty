@@ -1,3 +1,5 @@
+import { mountChatOverlay, unmountChatOverlay, receiveMessage } from "./chat-overlay.js";
+
 let isSyncing = false;
 let currentVideo = null;
 let lastUrl = location.href;
@@ -55,44 +57,60 @@ function attachPlayerListeners(video) {
 }
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type !== "APPLY_SYNC") return;
-  const video = findVideo();
-  if (!video) return;
+  if (message.type === "APPLY_SYNC") {
+    const video = findVideo();
+    if (!video) return;
 
-  const { action } = message;
-  if (!action || typeof action.type !== "string") return;
+    const { action } = message;
+    if (!action || typeof action.type !== "string") return;
 
-  const hasCurrentTime = typeof action.currentTime === "number" && action.currentTime !== null;
-  if (hasCurrentTime && (action.type === "seek" || Math.abs(video.currentTime - action.currentTime) > 2)) {
-    isSyncing = true;
-    video.currentTime = action.currentTime;
-    video.addEventListener(
-      "seeked",
-      () => {
-        isSyncing = false;
-      },
-      { once: true }
-    );
-  }
-
-  if (action.type === "play") {
-    isSyncing = true;
-    video
-      .play()
-      .catch(() => {})
-      .finally(() => {
-        setTimeout(() => {
+    const hasCurrentTime = typeof action.currentTime === "number" && action.currentTime !== null;
+    if (hasCurrentTime && (action.type === "seek" || Math.abs(video.currentTime - action.currentTime) > 2)) {
+      isSyncing = true;
+      video.currentTime = action.currentTime;
+      video.addEventListener(
+        "seeked",
+        () => {
           isSyncing = false;
-        }, 300);
-      });
+        },
+        { once: true }
+      );
+    }
+
+    if (action.type === "play") {
+      isSyncing = true;
+      video
+        .play()
+        .catch(() => {})
+        .finally(() => {
+          setTimeout(() => {
+            isSyncing = false;
+          }, 300);
+        });
+    }
+
+    if (action.type === "pause") {
+      isSyncing = true;
+      video.pause();
+      setTimeout(() => {
+        isSyncing = false;
+      }, 100);
+    }
+    return;
   }
 
-  if (action.type === "pause") {
-    isSyncing = true;
-    video.pause();
-    setTimeout(() => {
-      isSyncing = false;
-    }, 100);
+  if (message.type === "ROOM_JOINED") {
+    mountChatOverlay(message.username);
+    return;
+  }
+
+  if (message.type === "ROOM_LEFT") {
+    unmountChatOverlay();
+    return;
+  }
+
+  if (message.type === "INCOMING_CHAT") {
+    receiveMessage(message.payload || {});
   }
 });
 
@@ -156,6 +174,12 @@ function onNavigate() {
   lastUrl = location.href;
   currentVideo = null;
   waitForVideo();
+
+  chrome.storage.local.get(["inRoom", "username"], (stored) => {
+    if (stored.inRoom && stored.username) {
+      mountChatOverlay(stored.username);
+    }
+  });
 }
 
 if (typeof window !== "undefined") {

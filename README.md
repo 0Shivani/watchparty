@@ -99,6 +99,10 @@ Then in Chrome:
 - Ad detection relies on platform DOM structure which can change without notice; YouTube's `.ad-showing` class is the most stable, while Netflix/Prime/Hotstar selectors may need updates over time.
 - The extension cannot suppress ads themselves; it only pauses other members' playback during an ad break and resumes after it ends.
 - If the popup is closed during an ad break, the `ad-ended` signal may not reach the server, so users should keep the popup open during watch sessions.
+- Chat UI is injected into the video page DOM. On strict CSP platforms (notably Netflix), `backdrop-filter` can be ignored; chat remains visible and functional without blur.
+- Chat overlay is mounted per tab. If the same platform is open in multiple tabs, only the active tab at join time gets the overlay and another tab may need refresh after joining.
+- Chat messages are not persisted. Rejoining a room starts a fresh local chat history.
+- Content-script `import` requires module-compatible bundling. Ensure `@crxjs/vite-plugin` bundles `chat-overlay.js` into each platform content script; if imports fail, inline fallback code can be used.
 
 ## Future Improvements
 
