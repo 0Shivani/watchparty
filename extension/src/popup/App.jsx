@@ -18,6 +18,46 @@ function formatAction(action) {
   return `${labelByType[action.type] || action.type} at ${formatTime(action.currentTime)}`;
 }
 
+function getPlatformFromUrl(url) {
+  if (!url) return "";
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    if (hostname.includes("youtube.com")) return "youtube";
+    if (hostname.includes("netflix.com")) return "netflix";
+    if (hostname.includes("primevideo.com")) return "primevideo";
+    if (hostname.includes("hotstar.com")) return "hotstar";
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function detectPlatformFromActiveTab() {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        if (chrome.runtime.lastError) {
+          resolve("");
+          return;
+        }
+        resolve(getPlatformFromUrl(tabs?.[0]?.url));
+      });
+    } catch {
+      resolve("");
+    }
+  });
+}
+
+function formatPlatform(platform) {
+  const labels = {
+    youtube: "YouTube",
+    netflix: "Netflix",
+    primevideo: "Prime Video",
+    hotstar: "JioHotstar",
+  };
+  return labels[String(platform || "").toLowerCase()] || "Unknown";
+}
+
 export default function App() {
   const [connectionState, setConnectionState] = useState("disconnected");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
@@ -29,6 +69,7 @@ export default function App() {
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [inRoom, setInRoom] = useState(false);
   const [memberCount, setMemberCount] = useState(0);
+  const [platform, setPlatform] = useState("");
 
   const [username, setUsername] = useState("");
   const [usernameInput, setUsernameInput] = useState("");
@@ -77,6 +118,7 @@ export default function App() {
     }
     if (snapshot.inRoom != null) setInRoom(Boolean(snapshot.inRoom));
     if (snapshot.memberCount != null) setMemberCount(snapshot.memberCount);
+    if (snapshot.platform != null) setPlatform(snapshot.platform);
     if (snapshot.username != null) {
       setUsername(snapshot.username);
     }
@@ -90,11 +132,13 @@ export default function App() {
       setRoomCodeInput(createdCode);
       setUsername(activeUsername);
       setInRoom(true);
+      setPlatform(payload?.platform || "");
       setErrorText("");
       chrome.runtime.sendMessage({
         type: "POPUP_JOINED_ROOM",
         roomCode: createdCode,
         username: activeUsername,
+        platform: payload?.platform || "",
       });
       return;
     }
@@ -107,11 +151,13 @@ export default function App() {
       setUsername(activeUsername);
       setInRoom(true);
       setMemberCount(payload?.memberCount || 0);
+      setPlatform(payload?.platform || "");
       setErrorText("");
       chrome.runtime.sendMessage({
         type: "POPUP_JOINED_ROOM",
         roomCode: joinedCode,
         username: activeUsername,
+        platform: payload?.platform || "",
       });
       return;
     }
@@ -124,6 +170,7 @@ export default function App() {
         setInRoom(false);
         setRoomCode("");
         setRoomCodeInput("");
+        setPlatform("");
       } else {
         setErrorText(payload?.message || "An error occurred.");
       }
@@ -175,30 +222,39 @@ export default function App() {
     setErrorText("");
   }
 
-  function handleCreateRoom() {
+  async function handleCreateRoom() {
     if (!validateUsername()) return;
     const normalizedUsername = usernameInput.trim();
+    const detectedPlatform = await detectPlatformFromActiveTab();
     setUsername(normalizedUsername);
     setUsernameError("");
     setErrorText("");
     chrome.runtime.sendMessage({
       type: "POPUP_EMIT",
       event: "create-room",
-      payload: { username: normalizedUsername },
+      payload: {
+        username: normalizedUsername,
+        ...(detectedPlatform ? { platform: detectedPlatform } : {}),
+      },
     });
   }
 
-  function handleJoinRoom() {
+  async function handleJoinRoom() {
     if (!validateUsername()) return;
     if (!roomCodeInput.trim()) return;
     const normalizedUsername = usernameInput.trim();
+    const detectedPlatform = await detectPlatformFromActiveTab();
     setUsername(normalizedUsername);
     setUsernameError("");
     setErrorText("");
     chrome.runtime.sendMessage({
       type: "POPUP_EMIT",
       event: "join-room",
-      payload: { roomCode: roomCodeInput.toUpperCase().trim(), username: normalizedUsername },
+      payload: {
+        roomCode: roomCodeInput.toUpperCase().trim(),
+        username: normalizedUsername,
+        ...(detectedPlatform ? { platform: detectedPlatform } : {}),
+      },
     });
   }
 
@@ -213,6 +269,7 @@ export default function App() {
     setRoomCode("");
     setRoomCodeInput("");
     setMemberCount(0);
+    setPlatform("");
     setAdBanner(null);
     setLastSync(null);
   }
@@ -227,6 +284,7 @@ export default function App() {
     setRoomCode("");
     setRoomCodeInput("");
     setMemberCount(0);
+    setPlatform("");
     setLastSync(null);
     setErrorText("");
     setExpiredBanner(false);
@@ -348,6 +406,7 @@ export default function App() {
           <p className="room__username">
             Watching as <strong>{username}</strong>
           </p>
+          <div className="meta">🌐 Room platform: {formatPlatform(platform)}</div>
           <div className="meta">👥 {memberCount} in room</div>
           <div className="sync-pill">{formatAction(lastSync)}</div>
           <button className="btn danger-outline" onClick={handleLeaveRoom}>

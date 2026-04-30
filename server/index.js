@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import { fileURLToPath } from "url";
 
 const MAX_MEMBERS = 10;
+const SUPPORTED_PLATFORMS = new Set(["youtube", "netflix", "primevideo", "hotstar"]);
 
 const app = express();
 // Dev-only CORS policy; lock this down to trusted origins in production.
@@ -26,6 +27,12 @@ function safePayload(data) {
 function sanitizeUsername(raw) {
   if (!raw || typeof raw !== "string") return "A user";
   return raw.trim().slice(0, 20) || "A user";
+}
+
+function normalizePlatform(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  const normalized = raw.trim().toLowerCase();
+  return SUPPORTED_PLATFORMS.has(normalized) ? normalized : "";
 }
 
 function generateRoomCode() {
@@ -100,26 +107,29 @@ io.on("connection", (socket) => {
 
   socket.on("create-room", (rawData) => {
     leaveCurrentRoom(socket, rooms);
-    const { username } = safePayload(rawData);
+    const { username, platform } = safePayload(rawData);
     const displayName = sanitizeUsername(username);
+    const normalizedPlatform = normalizePlatform(platform);
     const roomCode = createUniqueRoomCode();
     rooms.set(roomCode, {
       hostId: socket.id,
       members: new Set([socket.id]),
       usernames: new Map([[socket.id, displayName]]),
+      platform: normalizedPlatform,
     });
 
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
     socket.data.username = displayName;
-    socket.emit("room-created", { roomCode });
-    socket.emit("room-joined", { roomCode, memberCount: 1 });
+    socket.emit("room-created", { roomCode, platform: normalizedPlatform });
+    socket.emit("room-joined", { roomCode, memberCount: 1, platform: normalizedPlatform });
     emitMemberUpdate(roomCode);
   });
 
   socket.on("join-room", (rawData) => {
-    const { roomCode, username } = safePayload(rawData);
+    const { roomCode, username, platform } = safePayload(rawData);
     const displayName = sanitizeUsername(username);
+    const normalizedPlatform = normalizePlatform(platform);
     if (!roomCode) {
       socket.emit("room-error", { message: "Room code is required." });
       return;
@@ -133,6 +143,17 @@ io.on("connection", (socket) => {
       return;
     }
 
+    if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
+      socket.emit("room-error", {
+        message: `Room is locked to ${room.platform}. Open the same website to join.`,
+      });
+      return;
+    }
+
+    if (!room.platform && normalizedPlatform) {
+      room.platform = normalizedPlatform;
+    }
+
     leaveCurrentRoom(socket, rooms);
     room.members.add(socket.id);
     room.usernames = room.usernames || new Map();
@@ -144,22 +165,40 @@ io.on("connection", (socket) => {
     socket.emit("room-joined", {
       roomCode: normalizedCode,
       memberCount: room.members.size,
+      platform: room.platform || "",
     });
     emitMemberUpdate(normalizedCode);
   });
 
   socket.on("sync-event", (rawData) => {
-    const { roomCode, action } = safePayload(rawData);
+    const { roomCode, action, platform } = safePayload(rawData);
     if (!roomCode || !action || typeof action.type !== "string") return;
+    const normalizedPlatform = normalizePlatform(platform);
     const normalizedCode = String(roomCode || "").toUpperCase().trim();
     const room = rooms.get(normalizedCode);
     if (!room || !room.members.has(socket.id)) return;
 
-    socket.to(normalizedCode).emit("sync-event", { action });
+    if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
+      socket.emit("room-error", {
+        message: `Room is locked to ${room.platform}. Open the same website to sync.`,
+      });
+      return;
+    }
+    if (!room.platform && normalizedPlatform) {
+      room.platform = normalizedPlatform;
+    }
+
+    const resolvedPlatform = room.platform || normalizedPlatform;
+    const syncPayload = { action };
+    if (resolvedPlatform) {
+      syncPayload.platform = resolvedPlatform;
+    }
+    socket.to(normalizedCode).emit("sync-event", syncPayload);
   });
 
   socket.on("chat-message", (rawData) => {
-    const { roomCode, text } = safePayload(rawData);
+    const { roomCode, text, platform } = safePayload(rawData);
+    const normalizedPlatform = normalizePlatform(platform);
     const normalizedCode = String(roomCode || socket.data.roomCode || "")
       .toUpperCase()
       .trim();
@@ -175,11 +214,26 @@ io.on("connection", (socket) => {
     const username = socket.data.username || "A user";
     const timestamp = Date.now();
 
-    socket.to(normalizedCode).emit("chat-message", {
+    if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
+      socket.emit("room-error", {
+        message: `Room is locked to ${room.platform}. Open the same website for chat.`,
+      });
+      return;
+    }
+    if (!room.platform && normalizedPlatform) {
+      room.platform = normalizedPlatform;
+    }
+
+    const resolvedPlatform = room.platform || normalizedPlatform;
+    const chatPayload = {
       username,
       text: sanitizedText,
       timestamp,
-    });
+    };
+    if (resolvedPlatform) {
+      chatPayload.platform = resolvedPlatform;
+    }
+    socket.to(normalizedCode).emit("chat-message", chatPayload);
   });
 
   socket.on("leave-room", (rawData) => {
@@ -192,7 +246,8 @@ io.on("connection", (socket) => {
   });
 
   socket.on("ad-started", (rawData) => {
-    const { roomCode } = safePayload(rawData);
+    const { roomCode, platform } = safePayload(rawData);
+    const normalizedPlatform = normalizePlatform(platform);
     const normalizedCode = String(roomCode || socket.data.roomCode || "")
       .toUpperCase()
       .trim();
@@ -201,11 +256,29 @@ io.on("connection", (socket) => {
     if (!room || !room.members.has(socket.id)) return;
 
     const username = socket.data.username || room.usernames?.get(socket.id) || "A user";
-    socket.to(normalizedCode).emit("ad-started", { username });
+    if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
+      socket.emit("room-error", {
+        message: `Room is locked to ${room.platform}. Open the same website for ad sync.`,
+      });
+      return;
+    }
+    if (!room.platform && normalizedPlatform) {
+      room.platform = normalizedPlatform;
+    }
+
+    const resolvedPlatform = room.platform || normalizedPlatform;
+    const adStartedPayload = {
+      username,
+    };
+    if (resolvedPlatform) {
+      adStartedPayload.platform = resolvedPlatform;
+    }
+    socket.to(normalizedCode).emit("ad-started", adStartedPayload);
   });
 
   socket.on("ad-ended", (rawData) => {
-    const { roomCode } = safePayload(rawData);
+    const { roomCode, platform } = safePayload(rawData);
+    const normalizedPlatform = normalizePlatform(platform);
     const normalizedCode = String(roomCode || socket.data.roomCode || "")
       .toUpperCase()
       .trim();
@@ -213,6 +286,21 @@ io.on("connection", (socket) => {
     const room = rooms.get(normalizedCode);
     if (!room || !room.members.has(socket.id)) return;
 
+    if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
+      socket.emit("room-error", {
+        message: `Room is locked to ${room.platform}. Open the same website for ad sync.`,
+      });
+      return;
+    }
+    if (!room.platform && normalizedPlatform) {
+      room.platform = normalizedPlatform;
+    }
+
+    const resolvedPlatform = room.platform || normalizedPlatform;
+    if (resolvedPlatform) {
+      socket.to(normalizedCode).emit("ad-ended", { platform: resolvedPlatform });
+      return;
+    }
     socket.to(normalizedCode).emit("ad-ended");
   });
 

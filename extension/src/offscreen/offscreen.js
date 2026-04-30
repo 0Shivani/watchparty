@@ -99,8 +99,8 @@ function connectSocket(serverUrl) {
     toServiceWorker("SOCKET_EVENT", { event: "ad-started", payload });
   });
 
-  socket.on("ad-ended", () => {
-    toServiceWorker("SOCKET_EVENT", { event: "ad-ended", payload: {} });
+  socket.on("ad-ended", (payload) => {
+    toServiceWorker("SOCKET_EVENT", { event: "ad-ended", payload: payload || {} });
   });
 
   socket.on("chat-message", (payload) => {
@@ -138,6 +138,7 @@ chrome.runtime.onMessage.addListener((message) => {
         socket.emit("join-room", {
           roomCode: message.roomCode,
           username: message.username,
+          platform: message.platform,
         });
       }
       break;
