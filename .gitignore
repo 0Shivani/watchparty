@@ -3,3 +3,4 @@ extension/dist/
 .env
 *.log
 .DS_Store
+extension/package-lock.json

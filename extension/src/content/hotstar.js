@@ -1,3 +1,5 @@
+import { createAdWatcher } from "./ad-detection.js";
+
 const {
   mountChatOverlay = () => {},
   unmountChatOverlay = () => {},
@@ -9,37 +11,13 @@ let isSyncing = false;
 let currentVideo = null;
 let lastUrl = location.href;
 const attachedVideos = new WeakSet();
-let adInProgress = false;
-let adWatcherStarted = false;
-
-function isAdPlaying() {
-  return !!(
-    document.querySelector("[class*='adContainer']") ||
-    document.querySelector("[class*='ad-overlay']")
-  );
-}
+let adWatcher = null;
 
 function startAdWatcher() {
-  if (!document.body) return;
-  adInProgress = isAdPlaying();
-  const observer = new MutationObserver(() => {
-    const adNow = isAdPlaying();
-
-    if (adNow && !adInProgress) {
-      adInProgress = true;
-      chrome.runtime.sendMessage({ type: "AD_STARTED" });
-    } else if (!adNow && adInProgress) {
-      adInProgress = false;
-      chrome.runtime.sendMessage({ type: "AD_ENDED" });
-    }
-  });
-
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["class"],
-  });
+  adWatcher = createAdWatcher(
+    () => chrome.runtime.sendMessage({ type: "AD_STARTED" }),
+    () => chrome.runtime.sendMessage({ type: "AD_ENDED" })
+  );
 }
 
 function findVideo() {
@@ -52,7 +30,7 @@ function attachPlayerListeners(video) {
 
   const sendEvent = (type) => {
     if (isSyncing) return;
-    if (adInProgress) return;
+    if (adWatcher?.isAdActive()) return;
     chrome.runtime.sendMessage({
       type: "LOCAL_EVENT",
       action: { type, currentTime: video.currentTime },
@@ -149,8 +127,7 @@ function attachToPlayer() {
   if (!video || video === currentVideo) return;
   currentVideo = video;
   attachPlayerListeners(video);
-  if (!adWatcherStarted) {
-    adWatcherStarted = true;
+  if (!adWatcher) {
     startAdWatcher();
   }
 
@@ -205,8 +182,8 @@ function onNavigate() {
   currentVideo = null;
   waitForVideo();
 
-  chrome.storage.local.get(["inRoom", "username"], (stored) => {
-    if (stored.inRoom && stored.username) {
+  chrome.storage.local.get(["inRoom", "username", "platform"], (stored) => {
+    if (stored.inRoom && stored.username && stored.platform === "hotstar") {
       mountChatOverlay(stored.username);
     }
   });
@@ -214,3 +191,9 @@ function onNavigate() {
 
 watchNavigation();
 waitForVideo();
+
+chrome.storage.local.get(["inRoom", "username", "platform"], (stored) => {
+  if (stored.inRoom && stored.username && stored.platform === "hotstar") {
+    mountChatOverlay(stored.username);
+  }
+});

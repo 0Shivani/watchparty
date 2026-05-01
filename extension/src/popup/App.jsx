@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import "./popup.css";
+import { parseInviteLink } from "../lib/parseInviteLink.js";
 
 function formatTime(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -58,6 +59,7 @@ function formatPlatform(platform) {
   return labels[String(platform || "").toLowerCase()] || "Unknown";
 }
 
+
 export default function App() {
   const [connectionState, setConnectionState] = useState("disconnected");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
@@ -67,6 +69,7 @@ export default function App() {
 
   const [roomCode, setRoomCode] = useState("");
   const [roomCodeInput, setRoomCodeInput] = useState("");
+  const [pendingRoomCode, setPendingRoomCode] = useState("");
   const [inRoom, setInRoom] = useState(false);
   const [memberCount, setMemberCount] = useState(0);
   const [platform, setPlatform] = useState("");
@@ -105,6 +108,12 @@ export default function App() {
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
+
+  useEffect(() => {
+    if (uiState === "lobby" && pendingRoomCode) {
+      setRoomCodeInput(pendingRoomCode);
+    }
+  }, [uiState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyStateSnapshot(snapshot) {
     if (snapshot.serverUrl != null) {
@@ -297,6 +306,11 @@ export default function App() {
     await navigator.clipboard.writeText(roomCode);
   }
 
+  async function copyInviteLink() {
+    if (!roomCode || !serverUrl) return;
+    await navigator.clipboard.writeText(`${serverUrl}?room=${roomCode}`);
+  }
+
   return (
     <div className="popup-root">
       <header className="popup-header">
@@ -338,17 +352,27 @@ export default function App() {
 
       {uiState === "setup" && (
         <section className="card">
-          <label htmlFor="server-url">Server URL</label>
+          <label htmlFor="server-url">Invite Link</label>
           <input
             id="server-url"
-            placeholder="http://localhost:3001"
+            placeholder="https://your-server.ngrok-free.app?room=ABC123"
             value={serverUrlInput}
-            onChange={(e) => setServerUrlInput(e.target.value)}
+            onChange={(e) => {
+              const raw = e.target.value;
+              const parsed = parseInviteLink(raw);
+              if (parsed) {
+                setServerUrlInput(parsed.serverUrl);
+                setPendingRoomCode(parsed.roomCode);
+              } else {
+                setServerUrlInput(raw);
+                setPendingRoomCode("");
+              }
+            }}
           />
           <button className="btn primary" onClick={handleSaveServer}>
             Save & Connect
           </button>
-          <p className="helper">Run the server locally or paste your ngrok URL.</p>
+          <p className="helper">Hosts: paste just your server URL. Guests: paste the full invite link.</p>
         </section>
       )}
 
@@ -376,19 +400,14 @@ export default function App() {
           <button className="btn primary" onClick={handleCreateRoom}>
             Create Room
           </button>
-
-          <div className="divider">or</div>
-
-          <input
-            placeholder="ROOM12"
-            maxLength={6}
-            value={roomCodeInput}
-            onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
-          />
-          <button className="btn" onClick={handleJoinRoom}>
-            Join Room
-          </button>
-
+          {pendingRoomCode && (
+            <>
+              <div className="divider">or</div>
+              <button className="btn" onClick={handleJoinRoom}>
+                Join Room
+              </button>
+            </>
+          )}
           <button className="link-btn" onClick={handleChangeServer}>
             Change server
           </button>
@@ -397,12 +416,9 @@ export default function App() {
 
       {uiState === "in-room" && (
         <section className="card">
-          <div className="room-code-row">
-            <div className="room-code">{roomCode}</div>
-            <button className="icon-btn" onClick={copyCode} title="Copy room code">
-              📋
-            </button>
-          </div>
+          <button className="btn" onClick={copyInviteLink}>
+            Copy Invite Link
+          </button>
           <p className="room__username">
             Watching as <strong>{username}</strong>
           </p>

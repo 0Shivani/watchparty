@@ -205,8 +205,8 @@ function onNavigate() {
   currentVideo = null;
   waitForVideo();
 
-  chrome.storage.local.get(["inRoom", "username"], (stored) => {
-    if (stored.inRoom && stored.username) {
+  chrome.storage.local.get(["inRoom", "username", "platform"], (stored) => {
+    if (stored.inRoom && stored.username && stored.platform === "primevideo") {
       mountChatOverlay(stored.username);
     }
   });
@@ -214,3 +214,9 @@ function onNavigate() {
 
 watchNavigation();
 waitForVideo();
+
+chrome.storage.local.get(["inRoom", "username", "platform"], (stored) => {
+  if (stored.inRoom && stored.username && stored.platform === "primevideo") {
+    mountChatOverlay(stored.username);
+  }
+});

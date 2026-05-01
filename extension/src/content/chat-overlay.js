@@ -9,6 +9,7 @@ let messageHistory = [];
 let currentUsername = "";
 let outsideClickHandler = null;
 let openPanelHandler = null;
+let fullscreenChangeHandler = null;
 
 function mountChatOverlay(username) {
   if (overlayMounted && document.getElementById(OVERLAY_ID)) return;
@@ -52,7 +53,25 @@ function mountChatOverlay(username) {
   root.appendChild(toasts);
   root.appendChild(panel);
 
-  document.body.appendChild(root);
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsEl) {
+    fsEl.appendChild(root);
+  } else {
+    document.body.appendChild(root);
+  }
+
+  fullscreenChangeHandler = () => {
+    const r = document.getElementById(OVERLAY_ID);
+    if (!r) return;
+    const fs = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fs) {
+      fs.appendChild(r);
+    } else {
+      document.body.appendChild(r);
+    }
+  };
+  document.addEventListener("fullscreenchange", fullscreenChangeHandler);
+  document.addEventListener("webkitfullscreenchange", fullscreenChangeHandler);
 
   applyInputBarPosition();
   bindChatEvents(input, sendBtn, posBtn, closeBtn, panel, panelMessages);
@@ -68,6 +87,11 @@ function unmountChatOverlay() {
   if (openPanelHandler) {
     window.removeEventListener("wp-open-chat-panel", openPanelHandler);
     openPanelHandler = null;
+  }
+  if (fullscreenChangeHandler) {
+    document.removeEventListener("fullscreenchange", fullscreenChangeHandler);
+    document.removeEventListener("webkitfullscreenchange", fullscreenChangeHandler);
+    fullscreenChangeHandler = null;
   }
   overlayMounted = false;
   messageHistory = [];
@@ -178,13 +202,19 @@ function renderMessages(panelMessages) {
 
 function applyInputBarPosition() {
   const bar = document.getElementById("wp-chat-input-bar");
+  const toasts = document.getElementById("wp-chat-toasts");
+  const panel = document.getElementById("wp-chat-panel");
   if (!bar) return;
   if (inputBarPosition === "bottom") {
     bar.style.bottom = "0";
     bar.style.top = "auto";
+    if (toasts) { toasts.style.bottom = "90px"; toasts.style.top = "auto"; }
+    if (panel) { panel.style.bottom = "90px"; panel.style.top = "auto"; }
   } else {
     bar.style.top = "0";
     bar.style.bottom = "auto";
+    if (toasts) { toasts.style.top = "50px"; toasts.style.bottom = "auto"; }
+    if (panel) { panel.style.top = "50px"; panel.style.bottom = "auto"; }
   }
 }
 
@@ -265,12 +295,12 @@ function injectStyles() {
     }
     #wp-chat-toasts {
       position: fixed;
-      right: 14px;
-      bottom: 60px;
+      left: 14px;
+      bottom: 90px;
       display: flex;
       flex-direction: column;
       gap: 8px;
-      align-items: flex-end;
+      align-items: flex-start;
       pointer-events: none;
       z-index: 2147483647;
     }
@@ -281,12 +311,12 @@ function injectStyles() {
       border-radius: 8px;
       color: #fff;
       cursor: pointer;
-      font-size: 12px;
-      max-width: 240px;
+      font-size: 14px;
+      max-width: 280px;
       opacity: 0;
-      padding: 8px 12px;
+      padding: 10px 14px;
       pointer-events: all;
-      transform: translateX(10px);
+      transform: translateX(-10px);
       transition: opacity 0.2s ease, transform 0.2s ease;
       word-break: break-word;
     }
@@ -304,10 +334,10 @@ function injectStyles() {
     }
     #wp-chat-panel {
       position: fixed;
-      right: 14px;
-      bottom: 60px;
-      width: 260px;
-      max-height: 320px;
+      left: 14px;
+      bottom: 90px;
+      width: 300px;
+      max-height: 360px;
       background: rgba(10, 10, 10, 0.92);
       backdrop-filter: blur(12px);
       border: 1px solid rgba(255, 255, 255, 0.12);
@@ -337,10 +367,10 @@ function injectStyles() {
     #wp-chat-panel-messages {
       flex: 1;
       overflow-y: auto;
-      padding: 4px 12px 12px;
+      padding: 6px 14px 14px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 12px;
     }
     #wp-chat-panel-messages::-webkit-scrollbar {
       width: 4px;
@@ -356,17 +386,27 @@ function injectStyles() {
     }
     .wp-msg-user {
       color: #f5a623;
-      font-size: 11px;
+      font-size: 13px;
       font-weight: 600;
     }
     .wp-msg-time {
       color: #555;
-      font-size: 10px;
+      font-size: 11px;
     }
     .wp-msg-text {
       color: #e0e0e0;
-      font-size: 12px;
+      font-size: 14px;
+      line-height: 1.4;
       word-break: break-word;
+    }
+    @media (max-width: 600px) {
+      #wp-chat-panel {
+        width: calc(100vw - 28px);
+        max-width: 260px;
+      }
+      .wp-toast {
+        max-width: calc(100vw - 28px);
+      }
     }
   `;
   if (document.head) {
