@@ -571,3 +571,90 @@ describe("Leaving and Disconnecting", () => {
     expect(roomError).not.toHaveBeenCalled();
   });
 });
+
+describe("Invite Redirects", () => {
+  let hostClient;
+  let guestClient;
+
+  afterEach(() => {
+    [hostClient, guestClient].forEach((client) => {
+      if (client?.connected) {
+        client.emit("leave-room", {});
+        client.disconnect();
+      }
+    });
+    hostClient = undefined;
+    guestClient = undefined;
+  });
+
+  it("creates an invite token and redirects to watch URL with invite params", async () => {
+    hostClient = await createClient();
+    const created = new Promise((resolve) => hostClient.once("room-created", resolve));
+    hostClient.emit("create-room", { username: "HostUser", platform: "youtube" });
+    const { roomCode } = await created;
+
+    const inviteResponse = await new Promise((resolve) => {
+      hostClient.emit(
+        "create-invite",
+        {
+          roomCode,
+          watchUrl: "https://www.youtube.com/watch?v=abc123",
+          serverUrl: serverAddress,
+          platform: "youtube",
+        },
+        resolve
+      );
+    });
+
+    expect(inviteResponse.ok).toBe(true);
+    expect(inviteResponse.invitePath).toMatch(/^\/invite\/[a-f0-9]{16}$/);
+
+    const response = await fetch(`${serverAddress}${inviteResponse.invitePath}`, { redirect: "manual" });
+    expect(response.status).toBe(302);
+    const locationHeader = response.headers.get("location");
+    expect(locationHeader).toBeTruthy();
+    const redirected = new URL(locationHeader);
+    expect(redirected.origin).toBe("https://www.youtube.com");
+    expect(redirected.searchParams.get("v")).toBe("abc123");
+    expect(redirected.searchParams.get("wp_room")).toBe(roomCode);
+    expect(redirected.searchParams.get("wp_server")).toBe(serverAddress);
+    expect(redirected.searchParams.get("wp_platform")).toBe("youtube");
+  });
+
+  it("rejects invite creation when no watch URL exists yet", async () => {
+    hostClient = await createClient();
+    const created = new Promise((resolve) => hostClient.once("room-created", resolve));
+    hostClient.emit("create-room", { username: "HostUser", platform: "youtube" });
+    const { roomCode } = await created;
+
+    const inviteResponse = await new Promise((resolve) => {
+      hostClient.emit("create-invite", { roomCode, serverUrl: serverAddress }, resolve);
+    });
+
+    expect(inviteResponse.ok).toBe(false);
+    expect(inviteResponse.message).toContain("watch URL");
+  });
+
+  it("prevents non-members from updating room watch target", async () => {
+    hostClient = await createClient();
+    guestClient = await createClient();
+    const created = new Promise((resolve) => hostClient.once("room-created", resolve));
+    hostClient.emit("create-room", { username: "HostUser", platform: "youtube" });
+    const { roomCode } = await created;
+
+    const response = await new Promise((resolve) => {
+      guestClient.emit(
+        "set-room-watch-target",
+        {
+          roomCode,
+          watchUrl: "https://www.youtube.com/watch?v=intruder",
+          platform: "youtube",
+        },
+        resolve
+      );
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.message).toContain("Room not found");
+  });
+});

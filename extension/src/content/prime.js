@@ -11,6 +11,9 @@ let lastUrl = location.href;
 const attachedVideos = new WeakSet();
 let adInProgress = false;
 let adWatcherStarted = false;
+const PLATFORM = "primevideo";
+let lastReportedWatchUrl = "";
+let lastInviteContextKey = "";
 
 function isAdPlaying() {
   return !!(
@@ -44,6 +47,67 @@ function startAdWatcher() {
 
 function findVideo() {
   return document.querySelector(".rendererContainer video") || document.querySelector("video");
+}
+
+function normalizeWatchUrl(rawUrl = location.href) {
+  try {
+    const url = new URL(rawUrl);
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    url.searchParams.delete("wp_room");
+    url.searchParams.delete("wp_server");
+    url.searchParams.delete("wp_platform");
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function sendWatchUrlChanged() {
+  const watchUrl = normalizeWatchUrl();
+  if (!watchUrl || watchUrl === lastReportedWatchUrl) return;
+  lastReportedWatchUrl = watchUrl;
+  chrome.runtime.sendMessage({
+    type: "WATCH_URL_CHANGED",
+    watchUrl,
+    platform: PLATFORM,
+  });
+}
+
+function parseInviteContextFromLocation() {
+  try {
+    const url = new URL(location.href);
+    const roomCode = String(url.searchParams.get("wp_room") || "")
+      .toUpperCase()
+      .trim();
+    const rawServerUrl = String(url.searchParams.get("wp_server") || "").trim();
+    const incomingPlatform = String(url.searchParams.get("wp_platform") || PLATFORM)
+      .toLowerCase()
+      .trim();
+    if (!roomCode || !rawServerUrl) return null;
+
+    const serverUrl = new URL(rawServerUrl);
+    if (!["http:", "https:"].includes(serverUrl.protocol)) return null;
+
+    return {
+      roomCode,
+      serverUrl: serverUrl.origin,
+      platform: incomingPlatform || PLATFORM,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sendInviteContextIfPresent() {
+  const inviteContext = parseInviteContextFromLocation();
+  if (!inviteContext) return;
+  const contextKey = `${inviteContext.serverUrl}|${inviteContext.roomCode}|${inviteContext.platform}`;
+  if (contextKey === lastInviteContextKey) return;
+  lastInviteContextKey = contextKey;
+  chrome.runtime.sendMessage({
+    type: "INVITE_CONTEXT_DETECTED",
+    inviteContext,
+  });
 }
 
 function attachPlayerListeners(video) {
@@ -149,6 +213,7 @@ function attachToPlayer() {
   if (!video || video === currentVideo) return;
   currentVideo = video;
   attachPlayerListeners(video);
+  sendWatchUrlChanged();
   if (!adWatcherStarted) {
     adWatcherStarted = true;
     startAdWatcher();
@@ -203,6 +268,8 @@ function onNavigate() {
   if (location.href === lastUrl) return;
   lastUrl = location.href;
   currentVideo = null;
+  sendInviteContextIfPresent();
+  sendWatchUrlChanged();
   waitForVideo();
 
   chrome.storage.local.get(["inRoom", "username", "platform"], (stored) => {
@@ -213,6 +280,8 @@ function onNavigate() {
 }
 
 watchNavigation();
+sendInviteContextIfPresent();
+sendWatchUrlChanged();
 waitForVideo();
 
 chrome.storage.local.get(["inRoom", "username", "platform"], (stored) => {

@@ -30,6 +30,7 @@
 - **Session resilience** — exponential backoff reconnection, auto-rejoin on reconnect, 45-second server grace period for brief disconnects
 - **Persistent socket** — uses Chrome Offscreen Document API so closing the popup never drops the connection
 - **Room codes** — 6-character codes to create and share sessions instantly
+- **Deep-link invites** — host can share a single invite URL that opens the same OTT title and auto-joins the room
 
 ---
 
@@ -152,11 +153,11 @@ npm run build      # outputs to extension/dist/
 
 ### 4. Watch together
 
-1. Host shares the ngrok URL with friends
-2. All users open the WatchParty popup, paste the URL, click **Save & Connect**
-3. Host clicks **Create Room** and shares the 6-character room code
-4. Friends paste the code and click **Join Room**
-5. Everyone navigates to the same video — press play and sync begins automatically
+1. Everyone connects the extension to the same server URL once
+2. Host opens a supported OTT title, creates a room, then clicks **Copy Invite Link**
+3. Friends click that invite link directly from chat/social
+4. The browser redirects them to the same OTT title and the extension auto-joins the room in background
+5. Playback sync and chat start immediately after the page loads
 
 ---
 
@@ -190,6 +191,7 @@ validation.
 - **The extension cannot suppress ads** — it only coordinates pause/resume across members
   during ad breaks.
 - **Messages are not persisted** — chat history resets if a user rejoins the room.
+- **Invite links expire** — redirect invite tokens are short-lived and require the room to remain active.
 - **Bundling assumptions for content imports** — content-script `import` paths require
   module-compatible bundling (for example, ensuring `chat-overlay.js` is bundled per
   platform script via `@crxjs/vite-plugin`).

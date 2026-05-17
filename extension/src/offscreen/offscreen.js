@@ -2,6 +2,7 @@ import { io } from "socket.io-client";
 
 let socket = null;
 let reconnectManager = null;
+let currentServerUrl = "";
 
 function toServiceWorker(type, payload = {}) {
   chrome.runtime.sendMessage({ type, ...payload });
@@ -22,7 +23,8 @@ function isNgrokUrl(serverUrl) {
 }
 
 function connectSocket(serverUrl) {
-  if (socket?.connected) return;
+  if (!serverUrl) return;
+  if (socket?.connected && currentServerUrl === serverUrl) return;
 
   if (socket) {
     socket.removeAllListeners();
@@ -45,6 +47,7 @@ function connectSocket(serverUrl) {
   }
 
   socket = io(serverUrl, socketOptions);
+  currentServerUrl = serverUrl;
 
   reconnectManager = socket.io;
 
@@ -114,6 +117,7 @@ function disconnectSocket() {
     socket.disconnect();
     socket = null;
     reconnectManager = null;
+    currentServerUrl = "";
   }
 }
 
@@ -130,6 +134,22 @@ chrome.runtime.onMessage.addListener((message) => {
     case "OFFSCREEN_EMIT":
       if (socket?.connected) {
         socket.emit(message.event, message.payload);
+      }
+      break;
+
+    case "OFFSCREEN_EMIT_WITH_ACK":
+      if (socket?.connected) {
+        socket.emit(message.event, message.payload, (response) => {
+          toServiceWorker("OFFSCREEN_ACK", {
+            requestId: message.requestId,
+            response: response || {},
+          });
+        });
+      } else {
+        toServiceWorker("OFFSCREEN_ACK", {
+          requestId: message.requestId,
+          response: { ok: false, message: "Socket is not connected." },
+        });
       }
       break;
 

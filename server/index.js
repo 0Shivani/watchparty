@@ -2,10 +2,12 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 
 const MAX_MEMBERS = 10;
 const SUPPORTED_PLATFORMS = new Set(["youtube", "netflix", "primevideo", "hotstar"]);
+const INVITE_TOKEN_TTL_MS = 15 * 60 * 1000;
 
 const app = express();
 // Dev-only CORS policy; lock this down to trusted origins in production.
@@ -19,6 +21,7 @@ const io = new Server(httpServer, {
 
 const rooms = new Map();
 const disconnectTimers = new Map(); // socketId -> timeoutId
+const inviteTokens = new Map(); // token -> { roomCode, serverUrl, expiresAt }
 
 function safePayload(data) {
   return data && typeof data === "object" && !Array.isArray(data) ? data : {};
@@ -33,6 +36,64 @@ function normalizePlatform(raw) {
   if (!raw || typeof raw !== "string") return "";
   const normalized = raw.trim().toLowerCase();
   return SUPPORTED_PLATFORMS.has(normalized) ? normalized : "";
+}
+
+function getPlatformFromWatchUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  try {
+    const hostname = new URL(rawUrl).hostname.toLowerCase();
+    if (hostname.includes("youtube.com")) return "youtube";
+    if (hostname.includes("netflix.com")) return "netflix";
+    if (hostname.includes("primevideo.com")) return "primevideo";
+    if (hostname.includes("hotstar.com")) return "hotstar";
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeWatchUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeServerUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+function createInviteToken() {
+  return randomBytes(8).toString("hex");
+}
+
+function pruneExpiredInviteTokens(now = Date.now()) {
+  for (const [token, payload] of inviteTokens.entries()) {
+    if (!payload || payload.expiresAt <= now) {
+      inviteTokens.delete(token);
+    }
+  }
+}
+
+function buildRedirectUrl(watchUrl, payload) {
+  const target = new URL(watchUrl);
+  target.searchParams.set("wp_room", payload.roomCode);
+  target.searchParams.set("wp_server", payload.serverUrl);
+  if (payload.platform) {
+    target.searchParams.set("wp_platform", payload.platform);
+  }
+  return target.toString();
 }
 
 function generateRoomCode() {
@@ -101,6 +162,37 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", rooms: rooms.size });
 });
 
+app.get("/invite/:token", (req, res) => {
+  const token = String(req.params.token || "").trim().toLowerCase();
+  if (!token) {
+    res.status(400).json({ message: "Invite token is required." });
+    return;
+  }
+
+  pruneExpiredInviteTokens();
+  const invite = inviteTokens.get(token);
+  if (!invite) {
+    res.status(404).json({ message: "Invite not found or expired." });
+    return;
+  }
+
+  const room = rooms.get(invite.roomCode);
+  if (!room || !room.watchUrl) {
+    res.status(410).json({ message: "Invite is no longer active." });
+    return;
+  }
+
+  const fallbackServerUrl = `${req.protocol}://${req.get("host")}`;
+  const serverUrl = normalizeServerUrl(invite.serverUrl) || fallbackServerUrl;
+  const platform = room.platform || getPlatformFromWatchUrl(room.watchUrl);
+  const redirectUrl = buildRedirectUrl(room.watchUrl, {
+    roomCode: invite.roomCode,
+    serverUrl,
+    platform,
+  });
+  res.redirect(302, redirectUrl);
+});
+
 io.on("connection", (socket) => {
   socket.data.roomCode = null;
   socket.data.username = null;
@@ -116,6 +208,7 @@ io.on("connection", (socket) => {
       members: new Set([socket.id]),
       usernames: new Map([[socket.id, displayName]]),
       platform: normalizedPlatform,
+      watchUrl: "",
     });
 
     socket.join(roomCode);
@@ -194,6 +287,118 @@ io.on("connection", (socket) => {
       syncPayload.platform = resolvedPlatform;
     }
     socket.to(normalizedCode).emit("sync-event", syncPayload);
+  });
+
+  socket.on("set-room-watch-target", (rawData, ack) => {
+    const { roomCode, watchUrl, platform } = safePayload(rawData);
+    const normalizedCode = String(roomCode || socket.data.roomCode || "")
+      .toUpperCase()
+      .trim();
+    const normalizedWatchUrl = normalizeWatchUrl(watchUrl);
+    if (!normalizedCode || !normalizedWatchUrl) {
+      if (typeof ack === "function") {
+        ack({ ok: false, message: "roomCode and watchUrl are required." });
+      }
+      return;
+    }
+
+    const room = rooms.get(normalizedCode);
+    if (!room || !room.members.has(socket.id)) {
+      if (typeof ack === "function") {
+        ack({ ok: false, message: "Room not found." });
+      }
+      return;
+    }
+
+    const payloadPlatform = normalizePlatform(platform);
+    const watchPlatform = getPlatformFromWatchUrl(normalizedWatchUrl);
+    const requestedPlatform = payloadPlatform || watchPlatform;
+
+    if (room.platform && requestedPlatform && room.platform !== requestedPlatform) {
+      socket.emit("room-error", {
+        message: `Room is locked to ${room.platform}. Open the same website to continue.`,
+      });
+      if (typeof ack === "function") {
+        ack({ ok: false, message: `Room is locked to ${room.platform}.` });
+      }
+      return;
+    }
+
+    if (!room.platform && requestedPlatform) {
+      room.platform = requestedPlatform;
+    }
+
+    room.watchUrl = normalizedWatchUrl;
+    if (typeof ack === "function") {
+      ack({ ok: true, watchUrl: room.watchUrl, platform: room.platform || requestedPlatform || "" });
+    }
+  });
+
+  socket.on("create-invite", (rawData, ack) => {
+    const { roomCode, watchUrl, platform, serverUrl } = safePayload(rawData);
+    const normalizedCode = String(roomCode || socket.data.roomCode || "")
+      .toUpperCase()
+      .trim();
+    if (!normalizedCode) {
+      if (typeof ack === "function") {
+        ack({ ok: false, message: "Room code is required." });
+      }
+      return;
+    }
+
+    const room = rooms.get(normalizedCode);
+    if (!room || !room.members.has(socket.id)) {
+      if (typeof ack === "function") {
+        ack({ ok: false, message: "Room not found." });
+      }
+      return;
+    }
+
+    const normalizedWatchUrl = normalizeWatchUrl(watchUrl);
+    if (normalizedWatchUrl) {
+      const payloadPlatform = normalizePlatform(platform);
+      const watchPlatform = getPlatformFromWatchUrl(normalizedWatchUrl);
+      const requestedPlatform = payloadPlatform || watchPlatform;
+      if (room.platform && requestedPlatform && room.platform !== requestedPlatform) {
+        socket.emit("room-error", {
+          message: `Room is locked to ${room.platform}. Open the same website to continue.`,
+        });
+        if (typeof ack === "function") {
+          ack({ ok: false, message: `Room is locked to ${room.platform}.` });
+        }
+        return;
+      }
+      if (!room.platform && requestedPlatform) {
+        room.platform = requestedPlatform;
+      }
+      room.watchUrl = normalizedWatchUrl;
+    }
+
+    if (!room.watchUrl) {
+      if (typeof ack === "function") {
+        ack({ ok: false, message: "No active watch URL found for this room yet." });
+      }
+      return;
+    }
+
+    pruneExpiredInviteTokens();
+    const token = createInviteToken();
+    const expiresAt = Date.now() + INVITE_TOKEN_TTL_MS;
+    const normalizedServerUrl = normalizeServerUrl(serverUrl);
+    inviteTokens.set(token, {
+      roomCode: normalizedCode,
+      serverUrl: normalizedServerUrl,
+      expiresAt,
+    });
+
+    if (typeof ack === "function") {
+      ack({
+        ok: true,
+        token,
+        expiresAt,
+        invitePath: `/invite/${token}`,
+      });
+    }
   });
 
   socket.on("chat-message", (rawData) => {

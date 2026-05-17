@@ -82,6 +82,7 @@ export default function App() {
   const [expiredBanner, setExpiredBanner] = useState(false);
   const [adBanner, setAdBanner] = useState(null);
   const [lastSync, setLastSync] = useState(null);
+  const [isCreatingInvite, setIsCreatingInvite] = useState(false);
 
   const uiState = useMemo(() => {
     if (!serverUrl) return "setup";
@@ -308,7 +309,22 @@ export default function App() {
 
   async function copyInviteLink() {
     if (!roomCode || !serverUrl) return;
-    await navigator.clipboard.writeText(`${serverUrl}?room=${roomCode}`);
+    setIsCreatingInvite(true);
+    setErrorText("");
+    try {
+      const response = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "POPUP_CREATE_INVITE" }, (result) => {
+          resolve(result || {});
+        });
+      });
+      if (!response?.ok || !response?.inviteUrl) {
+        setErrorText(response?.message || "Could not create invite link right now.");
+        return;
+      }
+      await navigator.clipboard.writeText(response.inviteUrl);
+    } finally {
+      setIsCreatingInvite(false);
+    }
   }
 
   return (
@@ -416,8 +432,8 @@ export default function App() {
 
       {uiState === "in-room" && (
         <section className="card">
-          <button className="btn" onClick={copyInviteLink}>
-            Copy Invite Link
+          <button className="btn" onClick={copyInviteLink} disabled={isCreatingInvite}>
+            {isCreatingInvite ? "Preparing Invite..." : "Copy Invite Link"}
           </button>
           <p className="room__username">
             Watching as <strong>{username}</strong>
