@@ -107,6 +107,15 @@ function sendInviteContextIfPresent() {
   });
 }
 
+function syncChatOverlayFromSession() {
+  chrome.runtime.sendMessage({ type: "CONTENT_GET_SESSION" }, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response?.shouldMountChat && response.username) {
+      mountChatOverlay(response.username);
+    }
+  });
+}
+
 function attachPlayerListeners(video) {
   if (!video || attachedVideos.has(video)) return;
   attachedVideos.add(video);
@@ -268,12 +277,7 @@ function onNavigate() {
   sendInviteContextIfPresent();
   sendWatchUrlChanged();
   waitForVideo();
-
-  chrome.storage.local.get(["inRoom", "username", "platform"], (stored) => {
-    if (stored.inRoom && stored.username && stored.platform === "youtube") {
-      mountChatOverlay(stored.username);
-    }
-  });
+  syncChatOverlayFromSession();
 }
 
 if (typeof window !== "undefined") {
@@ -282,6 +286,7 @@ if (typeof window !== "undefined") {
     sendInviteContextIfPresent();
     sendWatchUrlChanged();
     waitForVideo();
+    syncChatOverlayFromSession();
   });
 }
 
@@ -289,9 +294,4 @@ watchNavigation();
 sendInviteContextIfPresent();
 sendWatchUrlChanged();
 waitForVideo();
-
-chrome.storage.local.get(["inRoom", "username", "platform"], (stored) => {
-  if (stored.inRoom && stored.username && stored.platform === "youtube") {
-    mountChatOverlay(stored.username);
-  }
-});
+syncChatOverlayFromSession();

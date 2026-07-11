@@ -219,6 +219,28 @@ function triggerPendingAutoJoin() {
   });
 }
 
+function broadcastRoomJoined(username, platform) {
+  toSupportedTabs(
+    { type: "ROOM_JOINED", username: username || sessionState.username || "Guest" },
+    platform || sessionState.platform || ""
+  );
+}
+
+function tryRoomResync() {
+  if (!sessionState.inRoom || !sessionState.roomCode) return false;
+  if (sessionState.connectionState !== "connected" && sessionState.connectionState !== "reconnected") {
+    return false;
+  }
+  toOffscreen({
+    type: "OFFSCREEN_AUTO_REJOIN",
+    roomCode: sessionState.roomCode,
+    username: sessionState.username,
+    platform: sessionState.platform || "",
+  });
+  broadcastRoomJoined(sessionState.username, sessionState.platform);
+  return true;
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
     // Keep-alive no-op.
@@ -251,6 +273,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "POPUP_GET_STATE") {
     sendResponse({ sessionState });
+    return true;
+  }
+
+  if (message.type === "CONTENT_GET_SESSION") {
+    const senderPlatform = getPlatformFromUrl(sender?.tab?.url);
+    sendResponse({
+      inRoom: Boolean(sessionState.inRoom),
+      username: sessionState.username || "",
+      roomCode: sessionState.roomCode || "",
+      platform: sessionState.platform || "",
+      tabPlatform: senderPlatform,
+      shouldMountChat:
+        Boolean(sessionState.inRoom) &&
+        Boolean(sessionState.username) &&
+        Boolean(senderPlatform) &&
+        senderPlatform === (sessionState.platform || ""),
+    });
     return true;
   }
 
@@ -359,6 +398,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
+  if (message.type === "POPUP_RESYNC") {
+    const ok = tryRoomResync();
+    sendResponse({
+      ok,
+      message: ok
+        ? "Sync and chat reconnect requested."
+        : "You must be connected and in a room to resync.",
+    });
+    toPopup({ type: "STATE_UPDATE", sessionState: { ...sessionState } });
+    return true;
+  }
+
   if (message.type === "LOCAL_EVENT" && sender.tab) {
     const platform = getPlatformFromUrl(sender.tab.url);
     if (!platform) return;
@@ -448,10 +499,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       platform: platform || sessionState.platform || "",
     };
 
+    const isAlreadyInSameRoom =
+      sessionState.inRoom &&
+      normalizeRoomCode(sessionState.roomCode) === roomCode &&
+      normalizeServerUrl(sessionState.serverUrl) === serverUrl &&
+      (!pendingAutoJoin.platform || pendingAutoJoin.platform === sessionState.platform);
+
     persistSession({
       serverUrl,
       roomCode,
-      inRoom: false,
+      inRoom: isAlreadyInSameRoom ? true : false,
       platform: pendingAutoJoin.platform,
     }).then(async () => {
       await ensureOffscreenDocument();
@@ -511,8 +568,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         platform: payload?.platform || autoJoinContext.platform || sessionState.platform || "",
       }).then(() => {
         chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.4 });
-        toSupportedTabs(
-          { type: "ROOM_JOINED", username: autoJoinContext.username || sessionState.username || "Guest" },
+        broadcastRoomJoined(
+          autoJoinContext.username || sessionState.username || "Guest",
           payload?.platform || autoJoinContext.platform || ""
         );
       });

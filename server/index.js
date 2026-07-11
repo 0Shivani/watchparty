@@ -9,13 +9,22 @@ const MAX_MEMBERS = 10;
 const SUPPORTED_PLATFORMS = new Set(["youtube", "netflix", "primevideo", "hotstar"]);
 const INVITE_TOKEN_TTL_MS = 15 * 60 * 1000;
 
+// CORS_ALLOWED_ORIGINS is a comma-separated allowlist (e.g. the landing domain and
+// the published extension origin like chrome-extension://<id>). When unset, all
+// origins are allowed so local dev and unpublished extension builds keep working.
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const corsOrigin = allowedOrigins.length > 0 ? allowedOrigins : "*";
+
 const app = express();
-// Dev-only CORS policy; lock this down to trusted origins in production.
-app.use(cors({ origin: "*" }));
+app.use(cors({ origin: corsOrigin }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: "*" },
+  cors: { origin: corsOrigin },
   transports: ["websocket", "polling"]
 });
 
@@ -265,9 +274,12 @@ io.on("connection", (socket) => {
 
   socket.on("sync-event", (rawData) => {
     const { roomCode, action, platform } = safePayload(rawData);
-    if (!roomCode || !action || typeof action.type !== "string") return;
+    if (!action || typeof action.type !== "string") return;
     const normalizedPlatform = normalizePlatform(platform);
-    const normalizedCode = String(roomCode || "").toUpperCase().trim();
+    const normalizedCode = String(roomCode || socket.data.roomCode || "")
+      .toUpperCase()
+      .trim();
+    if (!normalizedCode) return;
     const room = rooms.get(normalizedCode);
     if (!room || !room.members.has(socket.id)) return;
 

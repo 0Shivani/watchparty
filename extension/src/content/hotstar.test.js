@@ -3,14 +3,25 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 // Helpers ─────────────────────────────────────────────────────────────────────
 
 function makeChrome({ inRoom = false, username = "", platform = "" } = {}) {
+  const shouldMountChat = Boolean(inRoom && username && platform === "hotstar");
   return {
-    storage: {
-      local: {
-        get: vi.fn((_keys, cb) => cb({ inRoom, username, platform })),
-      },
-    },
+    storage: { local: { get: vi.fn((_keys, cb) => cb({ inRoom, username, platform })) } },
     runtime: {
-      sendMessage: vi.fn(),
+      sendMessage: vi.fn((message, callback) => {
+        if (typeof callback !== "function") return;
+        if (message?.type === "CONTENT_GET_SESSION") {
+          callback({
+            inRoom,
+            username,
+            roomCode: "ABC123",
+            platform,
+            tabPlatform: "hotstar",
+            shouldMountChat,
+          });
+          return;
+        }
+        callback({});
+      }),
       onMessage: {
         addListener: vi.fn(),
       },
@@ -48,9 +59,9 @@ afterEach(() => {
   delete global.chrome;
 });
 
-// ─── Init-time storage check (the refresh fix) ───────────────────────────────
+// ─── Init-time session check (the refresh fix) ───────────────────────────────
 
-describe("init — storage check on page load", () => {
+describe("init — session check on page load", () => {
   test("mounts overlay when inRoom:true, username present, platform:hotstar", async () => {
     global.chrome = makeChrome({ inRoom: true, username: "alice", platform: "hotstar" });
     await loadHotstar();
@@ -84,10 +95,15 @@ describe("init — storage check on page load", () => {
     expect(chat.mountChatOverlay).not.toHaveBeenCalled();
   });
 
-  test("does not mount overlay when storage returns nothing", async () => {
+  test("does not mount overlay when session check returns nothing", async () => {
     global.chrome = {
       storage: { local: { get: vi.fn((_k, cb) => cb({})) } },
-      runtime: { sendMessage: vi.fn(), onMessage: { addListener: vi.fn() } },
+      runtime: {
+        sendMessage: vi.fn((_message, callback) => {
+          if (typeof callback === "function") callback({});
+        }),
+        onMessage: { addListener: vi.fn() },
+      },
     };
     await loadHotstar();
     await new Promise((r) => setTimeout(r, 0));
@@ -124,9 +140,28 @@ describe("runtime messages", () => {
     listener({ type: "INCOMING_CHAT", payload });
     expect(chat.receiveMessage).toHaveBeenCalledWith(payload);
   });
+
+  test("APPLY_SYNC is a no-op without video while INCOMING_CHAT still works", async () => {
+    const listener = await loadAndGetListener();
+    const chatPayload = { username: "carol", text: "still here", timestamp: 2000 };
+    chat.mountChatOverlay.mockClear();
+    chat.unmountChatOverlay.mockClear();
+    chat.receiveMessage.mockClear();
+    global.chrome.runtime.sendMessage.mockClear();
+
+    listener({ type: "APPLY_SYNC", action: { type: "play", currentTime: 12 } });
+    listener({ type: "INCOMING_CHAT", payload: chatPayload });
+
+    expect(chat.mountChatOverlay).not.toHaveBeenCalled();
+    expect(chat.unmountChatOverlay).not.toHaveBeenCalled();
+    expect(chat.receiveMessage).toHaveBeenCalledWith(chatPayload);
+    expect(global.chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "LOCAL_EVENT" })
+    );
+  });
 });
 
-// ─── onNavigate storage restoration ──────────────────────────────────────────
+// ─── onNavigate session restoration ──────────────────────────────────────────
 
 describe("onNavigate — SPA navigation restores overlay", () => {
   test("mounts overlay after pushState when inRoom:true and platform matches", async () => {

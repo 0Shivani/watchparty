@@ -83,6 +83,8 @@ export default function App() {
   const [adBanner, setAdBanner] = useState(null);
   const [lastSync, setLastSync] = useState(null);
   const [isCreatingInvite, setIsCreatingInvite] = useState(false);
+  const [isResyncing, setIsResyncing] = useState(false);
+  const [resyncNotice, setResyncNotice] = useState("");
 
   const uiState = useMemo(() => {
     if (!serverUrl) return "setup";
@@ -327,6 +329,26 @@ export default function App() {
     }
   }
 
+  async function handleResync() {
+    setIsResyncing(true);
+    setResyncNotice("");
+    setErrorText("");
+    try {
+      const response = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "POPUP_RESYNC" }, (result) => {
+          resolve(result || {});
+        });
+      });
+      if (!response?.ok) {
+        setErrorText(response?.message || "Could not re-establish sync right now.");
+        return;
+      }
+      setResyncNotice("Resync requested. Refresh only if playback still does not sync.");
+    } finally {
+      setIsResyncing(false);
+    }
+  }
+
   return (
     <div className="popup-root">
       <header className="popup-header">
@@ -365,6 +387,7 @@ export default function App() {
       )}
 
       {!!errorText && <div className="banner banner--error">{errorText}</div>}
+      {!!resyncNotice && <div className="banner banner--info">{resyncNotice}</div>}
 
       {uiState === "setup" && (
         <section className="card">
@@ -441,6 +464,16 @@ export default function App() {
           <div className="meta">🌐 Room platform: {formatPlatform(platform)}</div>
           <div className="meta">👥 {memberCount} in room</div>
           <div className="sync-pill">{formatAction(lastSync)}</div>
+          {memberCount > 1 && (
+            <div className="resync-card">
+              <p className="resync-card__text">
+                If a new member joined but playback/chat did not sync, use this recovery action first.
+              </p>
+              <button className="btn" onClick={handleResync} disabled={isResyncing}>
+                {isResyncing ? "Re-establishing..." : "Re-establish Sync & Chat"}
+              </button>
+            </div>
+          )}
           <button className="btn danger-outline" onClick={handleLeaveRoom}>
             Leave Room
           </button>

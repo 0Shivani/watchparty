@@ -222,6 +222,12 @@ input:focus {
   gap: 8px;
 }
 
+.banner--info {
+  background: rgba(48, 201, 107, 0.15);
+  border: 1px solid rgba(48, 201, 107, 0.35);
+  color: #7ee3a6;
+}
+
 .banner--error button {
   background: none;
   border: none;
@@ -230,6 +236,22 @@ input:focus {
   font-size: 14px;
   padding: 0;
   line-height: 1;
+}
+
+.resync-card {
+  background: #121212;
+  border: 1px solid #2d2d2d;
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resync-card__text {
+  margin: 0;
+  color: #cfcfcf;
+  font-size: 12px;
 }
 
 .spinner {

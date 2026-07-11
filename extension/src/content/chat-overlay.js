@@ -10,6 +10,7 @@ let currentUsername = "";
 let outsideClickHandler = null;
 let openPanelHandler = null;
 let fullscreenChangeHandler = null;
+let globalKeyboardShieldHandler = null;
 
 function mountChatOverlay(username) {
   if (overlayMounted && document.getElementById(OVERLAY_ID)) return;
@@ -93,6 +94,12 @@ function unmountChatOverlay() {
     document.removeEventListener("webkitfullscreenchange", fullscreenChangeHandler);
     fullscreenChangeHandler = null;
   }
+  if (globalKeyboardShieldHandler) {
+    document.removeEventListener("keydown", globalKeyboardShieldHandler, true);
+    document.removeEventListener("keypress", globalKeyboardShieldHandler, true);
+    document.removeEventListener("keyup", globalKeyboardShieldHandler, true);
+    globalKeyboardShieldHandler = null;
+  }
   overlayMounted = false;
   messageHistory = [];
 }
@@ -128,14 +135,22 @@ function bindChatEvents(input, sendBtn, posBtn, closeBtn, panel, panelMessages) 
     }
   };
 
-  input.addEventListener("keydown", (event) => {
-    // Prevent host page keyboard shortcuts (play/pause/seek/fullscreen) while typing in chat.
-    event.stopPropagation();
-    if (event.key === "Enter") {
+  // If a page emits keyboard events from elsewhere while chat input is focused,
+  // stop them early so host playback shortcuts do not run.
+  globalKeyboardShieldHandler = (event) => {
+    if (document.activeElement !== input) return;
+    if (event.type === "keydown" && event.key === "Enter") {
       event.preventDefault();
       sendMessage();
     }
-  });
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+  };
+  document.addEventListener("keydown", globalKeyboardShieldHandler, true);
+  document.addEventListener("keypress", globalKeyboardShieldHandler, true);
+  document.addEventListener("keyup", globalKeyboardShieldHandler, true);
   sendBtn.addEventListener("click", sendMessage);
 
   posBtn.addEventListener("click", () => {
