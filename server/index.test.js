@@ -251,6 +251,33 @@ describe("Sync Events", () => {
     expect(payload.action.currentTime).toBe(42.5);
   });
 
+  it("It should relay a sync-event when payload roomCode is missing but sender is in a room", async () => {
+    await connectTwoClientsInSameRoom();
+
+    const syncEvent = new Promise((resolve) => clientB.once("sync-event", resolve));
+    clientA.emit("sync-event", {
+      action: { type: "pause", currentTime: 21.25 },
+    });
+    const payload = await syncEvent;
+
+    expect(payload.action.type).toBe("pause");
+    expect(payload.action.currentTime).toBe(21.25);
+  });
+
+  it("It should drop a sync-event when both payload roomCode and socket room are missing", async () => {
+    clientA = await createClient();
+    clientB = await createClient();
+    const spy = vi.fn();
+    clientB.on("sync-event", spy);
+
+    clientA.emit("sync-event", {
+      action: { type: "play", currentTime: 3 },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("It should NOT echo a sync-event back to the sender", async () => {
     const roomCode = await connectTwoClientsInSameRoom();
     const spy = vi.fn();
