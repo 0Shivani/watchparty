@@ -1,4 +1,4 @@
-# WatchParty
+# Picnic
 
 > Synchronized OTT video playback for you and your friends — no account, no subscription,
 > just clone, run, and share a room code.

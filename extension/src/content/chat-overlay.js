@@ -268,7 +268,7 @@ function injectStyles() {
       align-items: center;
       gap: 6px;
       padding: 8px 14px;
-      background: rgba(10, 10, 10, 0.82);
+      background: rgba(23, 3, 7, 0.85);
       backdrop-filter: blur(8px);
       pointer-events: all;
       z-index: 2147483647;
@@ -276,23 +276,23 @@ function injectStyles() {
     }
     #wp-chat-input {
       flex: 1;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(224, 164, 176, 0.1);
+      border: 1px solid rgba(224, 164, 176, 0.25);
       border-radius: 6px;
-      color: #fff;
+      color: #f7e6e9;
       font-size: 13px;
       padding: 6px 10px;
       outline: none;
     }
     #wp-chat-input:focus {
-      border-color: #f5a623;
+      border-color: #e0a4b0;
     }
     #wp-chat-send-btn,
     #wp-chat-position-btn {
       background: none;
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      border: 1px solid rgba(224, 164, 176, 0.3);
       border-radius: 6px;
-      color: #ccc;
+      color: #c39ba3;
       cursor: pointer;
       font-size: 12px;
       padding: 6px 10px;
@@ -301,12 +301,12 @@ function injectStyles() {
       transition: border-color 0.15s;
     }
     #wp-chat-send-btn:hover {
-      border-color: #f5a623;
-      color: #f5a623;
+      border-color: #e0a4b0;
+      color: #e0a4b0;
     }
     #wp-chat-position-btn:hover {
-      border-color: #fff;
-      color: #fff;
+      border-color: #f0cdd4;
+      color: #f0cdd4;
     }
     #wp-chat-toasts {
       position: fixed;
@@ -320,11 +320,11 @@ function injectStyles() {
       z-index: 2147483647;
     }
     .wp-toast {
-      background: rgba(10, 10, 10, 0.88);
+      background: rgba(23, 3, 7, 0.9);
       backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(224, 164, 176, 0.22);
       border-radius: 8px;
-      color: #fff;
+      color: #f7e6e9;
       cursor: pointer;
       font-size: 14px;
       max-width: 280px;
@@ -340,12 +340,12 @@ function injectStyles() {
       transform: translateX(0);
     }
     .wp-toast-user {
-      color: #f5a623;
+      color: #e0a4b0;
       font-weight: 600;
       margin-right: 6px;
     }
     .wp-toast-text {
-      color: #e0e0e0;
+      color: #e6ccd2;
     }
     #wp-chat-panel {
       position: fixed;
@@ -353,9 +353,9 @@ function injectStyles() {
       bottom: 90px;
       width: 300px;
       max-height: 360px;
-      background: rgba(10, 10, 10, 0.92);
+      background: rgba(23, 3, 7, 0.94);
       backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(224, 164, 176, 0.22);
       border-radius: 10px;
       display: flex;
       flex-direction: column;
@@ -370,14 +370,14 @@ function injectStyles() {
       align-self: flex-end;
       background: none;
       border: none;
-      color: #888;
+      color: #9a6d76;
       cursor: pointer;
       font-size: 14px;
       padding: 8px 10px 4px;
       line-height: 1;
     }
     #wp-chat-panel-close:hover {
-      color: #fff;
+      color: #f0cdd4;
     }
     #wp-chat-panel-messages {
       flex: 1;
@@ -391,7 +391,7 @@ function injectStyles() {
       width: 4px;
     }
     #wp-chat-panel-messages::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.15);
+      background: rgba(224, 164, 176, 0.28);
       border-radius: 2px;
     }
     .wp-msg {
@@ -400,16 +400,16 @@ function injectStyles() {
       gap: 2px;
     }
     .wp-msg-user {
-      color: #f5a623;
+      color: #e0a4b0;
       font-size: 13px;
       font-weight: 600;
     }
     .wp-msg-time {
-      color: #555;
+      color: #7a4b54;
       font-size: 11px;
     }
     .wp-msg-text {
-      color: #e0e0e0;
+      color: #e6ccd2;
       font-size: 14px;
       line-height: 1.4;
       word-break: break-word;

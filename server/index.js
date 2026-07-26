@@ -568,7 +568,7 @@ io.on("connection", (socket) => {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const PORT = process.env.PORT || 3001;
   httpServer.listen(PORT, () => {
-    console.log(`WatchParty server running on port ${PORT}`);
+    console.log(`Picnic server running on port ${PORT}`);
   });
 }
 

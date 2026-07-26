@@ -231,7 +231,8 @@ function updateInviteBadge() {
   const text = pendingSiteInvite ? "1" : "";
   chrome.action?.setBadgeText?.({ text });
   if (pendingSiteInvite) {
-    chrome.action?.setBadgeBackgroundColor?.({ color: "#f5a623" });
+    chrome.action?.setBadgeBackgroundColor?.({ color: "#7c0116" });
+    chrome.action?.setBadgeTextColor?.({ color: "#e0a4b0" });
   }
 }
 

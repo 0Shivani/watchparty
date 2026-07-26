@@ -388,7 +388,7 @@ export default function App() {
   return (
     <div className="popup-root">
       <header className="popup-header">
-        <h1>WatchParty</h1>
+        <h1>Picnic</h1>
       </header>
 
       {uiState === "in-room" && adBanner && (
@@ -450,8 +450,8 @@ export default function App() {
           </button>
           <p className="helper">
             {siteAccess.approved
-              ? "WatchParty syncs the main video player on this site. Disabling also revokes its access."
-              : "Grants WatchParty access to this site so it can sync its video player. Use only for content you are allowed to watch."}
+              ? "Picnic syncs the main video player on this site. Disabling also revokes its access."
+              : "Grants Picnic access to this site so it can sync its video player. Use only for content you are allowed to watch."}
           </p>
         </section>
       )}

@@ -19,8 +19,8 @@ class PopupErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: "16px", fontFamily: "Inter, sans-serif", color: "#fff" }}>
-          <h2>WatchParty</h2>
+        <div style={{ padding: "16px", fontFamily: "Inter, sans-serif", color: "#f7e6e9" }}>
+          <h2>Picnic</h2>
           <p>Popup crashed. Please close and reopen the extension popup.</p>
         </div>
       );

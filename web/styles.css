@@ -1,11 +1,12 @@
 :root {
-  --bg: #0b0d12;
-  --bg-elev: #141821;
-  --border: #232838;
-  --text: #eef1f7;
-  --text-muted: #9aa3b5;
-  --accent: #6c5ce7;
-  --accent-hover: #7d6ff0;
+  --bg: #170307;
+  --bg-elev: #240710;
+  --border: #3d0d16;
+  --text: #f7e6e9;
+  --text-muted: #c39ba3;
+  --accent: #e0a4b0;
+  --accent-hover: #f0cdd4;
+  --accent-contrast: #7c0116;
   --radius: 14px;
   --maxw: 1040px;
 }
@@ -22,7 +23,7 @@ body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
-  background: radial-gradient(1200px 600px at 50% -10%, #1a1f2e 0%, var(--bg) 55%);
+  background: radial-gradient(1200px 600px at 50% -10%, #4a0a14 0%, var(--bg) 55%);
   color: var(--text);
   line-height: 1.55;
 }
@@ -71,7 +72,7 @@ main {
 
 .btn--primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
 }
 
 .btn--primary:hover {
@@ -210,7 +211,7 @@ main {
   height: 36px;
   border-radius: 50%;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
   display: grid;
   place-items: center;
   font-weight: 700;
@@ -227,12 +228,12 @@ main {
 }
 
 code {
-  background: #1e2330;
+  background: #2c0810;
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 2px 7px;
   font-size: 0.9em;
-  color: #cdd4e4;
+  color: #e8c3ca;
 }
 
 .cta {
