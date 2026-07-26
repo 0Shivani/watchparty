@@ -43,11 +43,24 @@ Node.js Server (Express + Socket.io)
 
 **Content Scripts** (`extension/src/content/`): One file per platform (youtube.js, netflix.js, prime.js, hotstar.js). Each hooks the platform's video element, detects ads, and mounts/unmounts the chat overlay (`chat-overlay.js`). Vanilla JS only — no bundler runs on content scripts. `ad-detection.js` is a shared utility used by Hotstar.
 
+`generic.js` is the adapter for user-approved sites. It has no per-site DOM knowledge: it ranks every `<video>` by area, playback state, and duration to pick the primary player, and skips ad detection. It runs with `allFrames: true`, so only the top frame reports watch URLs, invites, and chat. Re-running the script tears down the previous instance (`window.__watchPartyGeneric.teardown()`) rather than stacking listeners, since the service worker re-injects into open tabs on approval.
+
+### User-Approved Sites
+
+Beyond the four built-in platforms, users can approve any site from the popup. The popup calls `chrome.permissions.request()` (a user gesture is required) against `optional_host_permissions`, then the service worker persists the origin under `approvedSites` and registers `generic.js` for it via `chrome.scripting.registerContentScripts`.
+
+Approved sites get a platform key of `generic:<hostname>` rather than a shared `generic` bucket, so a room still locks to exactly one site. Both `extension/src/lib/parseInviteLink.js` and `server/index.js` validate this shape against `/^generic:[a-z0-9.-]{1,253}$/`.
+
+CRXJS rewrites bundled content scripts to hashed asset filenames, which `registerContentScripts` cannot reference. A vite plugin in `vite.config.js` therefore copies `chat-overlay.js` and `generic.js` verbatim to `dist/dynamic/`, giving the service worker stable paths. Both files are import-free vanilla JS, so a plain copy is sufficient.
+
+Because a guest arriving on an invite link for an unapproved site has no content script running, the service worker also parses `wp_room`/`wp_server` from the tab URL in `chrome.tabs.onUpdated` and surfaces the pending invite in the popup.
+
 ### Message Types
 
 | Direction | Message | Purpose |
 |---|---|---|
 | Popup → SW | `POPUP_CONNECT`, `POPUP_EMIT`, `POPUP_DISCONNECT` | User-initiated actions |
+| Popup → SW | `POPUP_GET_SITE_ACCESS`, `POPUP_SET_SITE_ACCESS`, `POPUP_DETECT_PLATFORM` | Approve/revoke sites, resolve the active tab's platform |
 | SW → Offscreen | `OFFSCREEN_CONNECT`, `OFFSCREEN_EMIT`, `OFFSCREEN_AUTO_REJOIN` | Socket control |
 | Offscreen → SW | `SOCKET_STATE`, `SOCKET_EVENT` | Connection state + server events |
 | SW → Content | `APPLY_SYNC`, `AD_STARTED_REMOTE`, `AD_ENDED_REMOTE`, `ROOM_JOINED`, `ROOM_LEFT`, `INCOMING_CHAT` | Sync commands |
@@ -75,6 +88,7 @@ Content scripts attach `play`, `pause`, `seeked` listeners to the video element.
 | `extension/src/content/netflix.js` | Netflix player hook |
 | `extension/src/content/prime.js` | Prime Video player hook |
 | `extension/src/content/hotstar.js` | Hotstar player hook |
+| `extension/src/content/generic.js` | Adapter for user-approved sites |
 | `extension/src/content/chat-overlay.js` | Injected chat UI |
 | `extension/src/content/ad-detection.js` | Shared ad detection utility |
 | `extension/src/lib/parseInviteLink.js` | Invite URL parser |

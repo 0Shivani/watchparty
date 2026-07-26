@@ -685,3 +685,119 @@ describe("Invite Redirects", () => {
     expect(response.message).toContain("Room not found");
   });
 });
+
+describe("Generic Site Rooms", () => {
+  let hostClient;
+  let guestClient;
+
+  afterEach(() => {
+    [hostClient, guestClient].forEach((client) => {
+      if (client?.connected) {
+        client.emit("leave-room", {});
+        client.disconnect();
+      }
+    });
+    hostClient = undefined;
+    guestClient = undefined;
+  });
+
+  async function createGenericRoom(platform) {
+    hostClient = await createClient();
+    const created = new Promise((resolve) => hostClient.once("room-created", resolve));
+    hostClient.emit("create-room", { username: "HostUser", platform });
+    return created;
+  }
+
+  it("locks a room to the hostname a generic site reports", async () => {
+    const payload = await createGenericRoom("generic:media.example.com");
+    expect(payload.platform).toBe("generic:media.example.com");
+  });
+
+  it("rejects a platform key that is not a valid hostname", async () => {
+    const payload = await createGenericRoom("generic:example.com/../etc");
+    expect(payload.platform).toBe("");
+  });
+
+  it("lets a second member join the same generic site", async () => {
+    const { roomCode } = await createGenericRoom("generic:media.example.com");
+
+    guestClient = await createClient();
+    const joined = new Promise((resolve) => guestClient.once("room-joined", resolve));
+    guestClient.emit("join-room", {
+      roomCode,
+      username: "GuestUser",
+      platform: "generic:media.example.com",
+    });
+
+    expect((await joined).platform).toBe("generic:media.example.com");
+  });
+
+  it("blocks a member arriving from a different generic site", async () => {
+    const { roomCode } = await createGenericRoom("generic:media.example.com");
+
+    guestClient = await createClient();
+    const error = new Promise((resolve) => guestClient.once("room-error", resolve));
+    guestClient.emit("join-room", {
+      roomCode,
+      username: "GuestUser",
+      platform: "generic:other.example.com",
+    });
+
+    expect((await error).message).toContain("media.example.com");
+  });
+
+  it("blocks a built-in platform member from joining a generic room", async () => {
+    const { roomCode } = await createGenericRoom("generic:media.example.com");
+
+    guestClient = await createClient();
+    const error = new Promise((resolve) => guestClient.once("room-error", resolve));
+    guestClient.emit("join-room", { roomCode, username: "GuestUser", platform: "youtube" });
+
+    expect((await error).message).toContain("media.example.com");
+  });
+
+  it("derives a generic platform from a watch URL with no built-in adapter", async () => {
+    hostClient = await createClient();
+    const created = new Promise((resolve) => hostClient.once("room-created", resolve));
+    hostClient.emit("create-room", { username: "HostUser" });
+    const { roomCode } = await created;
+
+    const response = await new Promise((resolve) => {
+      hostClient.emit(
+        "set-room-watch-target",
+        { roomCode, watchUrl: "https://media.example.com/watch/42" },
+        resolve
+      );
+    });
+
+    expect(response.ok).toBe(true);
+    expect(response.platform).toBe("generic:media.example.com");
+  });
+
+  it("redirects a generic invite back to the originating site", async () => {
+    const { roomCode } = await createGenericRoom("generic:media.example.com");
+
+    const inviteResponse = await new Promise((resolve) => {
+      hostClient.emit(
+        "create-invite",
+        {
+          roomCode,
+          watchUrl: "https://media.example.com/watch/42",
+          serverUrl: serverAddress,
+          platform: "generic:media.example.com",
+        },
+        resolve
+      );
+    });
+    expect(inviteResponse.ok).toBe(true);
+
+    const response = await fetch(`${serverAddress}${inviteResponse.invitePath}`, {
+      redirect: "manual",
+    });
+    const redirected = new URL(response.headers.get("location"));
+
+    expect(redirected.origin).toBe("https://media.example.com");
+    expect(redirected.searchParams.get("wp_room")).toBe(roomCode);
+    expect(redirected.searchParams.get("wp_platform")).toBe("generic:media.example.com");
+  });
+});

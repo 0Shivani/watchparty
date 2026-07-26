@@ -7,6 +7,9 @@ import { fileURLToPath } from "url";
 
 const MAX_MEMBERS = 10;
 const SUPPORTED_PLATFORMS = new Set(["youtube", "netflix", "primevideo", "hotstar"]);
+// Sites without a dedicated adapter are keyed by hostname, so a room still locks
+// to exactly one site rather than to a shared "generic" bucket.
+const GENERIC_PLATFORM_PATTERN = /^generic:[a-z0-9.-]{1,253}$/;
 const INVITE_TOKEN_TTL_MS = 15 * 60 * 1000;
 
 // CORS_ALLOWED_ORIGINS is a comma-separated allowlist (e.g. the landing domain and
@@ -44,7 +47,13 @@ function sanitizeUsername(raw) {
 function normalizePlatform(raw) {
   if (!raw || typeof raw !== "string") return "";
   const normalized = raw.trim().toLowerCase();
-  return SUPPORTED_PLATFORMS.has(normalized) ? normalized : "";
+  if (SUPPORTED_PLATFORMS.has(normalized)) return normalized;
+  return GENERIC_PLATFORM_PATTERN.test(normalized) ? normalized : "";
+}
+
+function formatPlatformLabel(platform) {
+  if (!platform || typeof platform !== "string") return "";
+  return platform.startsWith("generic:") ? platform.slice("generic:".length) : platform;
 }
 
 function getPlatformFromWatchUrl(rawUrl) {
@@ -55,7 +64,7 @@ function getPlatformFromWatchUrl(rawUrl) {
     if (hostname.includes("netflix.com")) return "netflix";
     if (hostname.includes("primevideo.com")) return "primevideo";
     if (hostname.includes("hotstar.com")) return "hotstar";
-    return "";
+    return normalizePlatform(`generic:${hostname}`);
   } catch {
     return "";
   }
@@ -247,7 +256,7 @@ io.on("connection", (socket) => {
 
     if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
       socket.emit("room-error", {
-        message: `Room is locked to ${room.platform}. Open the same website to join.`,
+        message: `Room is locked to ${formatPlatformLabel(room.platform)}. Open the same website to join.`,
       });
       return;
     }
@@ -285,7 +294,7 @@ io.on("connection", (socket) => {
 
     if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
       socket.emit("room-error", {
-        message: `Room is locked to ${room.platform}. Open the same website to sync.`,
+        message: `Room is locked to ${formatPlatformLabel(room.platform)}. Open the same website to sync.`,
       });
       return;
     }
@@ -328,10 +337,10 @@ io.on("connection", (socket) => {
 
     if (room.platform && requestedPlatform && room.platform !== requestedPlatform) {
       socket.emit("room-error", {
-        message: `Room is locked to ${room.platform}. Open the same website to continue.`,
+        message: `Room is locked to ${formatPlatformLabel(room.platform)}. Open the same website to continue.`,
       });
       if (typeof ack === "function") {
-        ack({ ok: false, message: `Room is locked to ${room.platform}.` });
+        ack({ ok: false, message: `Room is locked to ${formatPlatformLabel(room.platform)}.` });
       }
       return;
     }
@@ -373,10 +382,10 @@ io.on("connection", (socket) => {
       const requestedPlatform = payloadPlatform || watchPlatform;
       if (room.platform && requestedPlatform && room.platform !== requestedPlatform) {
         socket.emit("room-error", {
-          message: `Room is locked to ${room.platform}. Open the same website to continue.`,
+          message: `Room is locked to ${formatPlatformLabel(room.platform)}. Open the same website to continue.`,
         });
         if (typeof ack === "function") {
-          ack({ ok: false, message: `Room is locked to ${room.platform}.` });
+          ack({ ok: false, message: `Room is locked to ${formatPlatformLabel(room.platform)}.` });
         }
         return;
       }
@@ -433,7 +442,7 @@ io.on("connection", (socket) => {
 
     if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
       socket.emit("room-error", {
-        message: `Room is locked to ${room.platform}. Open the same website for chat.`,
+        message: `Room is locked to ${formatPlatformLabel(room.platform)}. Open the same website for chat.`,
       });
       return;
     }
@@ -475,7 +484,7 @@ io.on("connection", (socket) => {
     const username = socket.data.username || room.usernames?.get(socket.id) || "A user";
     if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
       socket.emit("room-error", {
-        message: `Room is locked to ${room.platform}. Open the same website for ad sync.`,
+        message: `Room is locked to ${formatPlatformLabel(room.platform)}. Open the same website for ad sync.`,
       });
       return;
     }
@@ -505,7 +514,7 @@ io.on("connection", (socket) => {
 
     if (room.platform && normalizedPlatform && room.platform !== normalizedPlatform) {
       socket.emit("room-error", {
-        message: `Room is locked to ${room.platform}. Open the same website for ad sync.`,
+        message: `Room is locked to ${formatPlatformLabel(room.platform)}. Open the same website for ad sync.`,
       });
       return;
     }

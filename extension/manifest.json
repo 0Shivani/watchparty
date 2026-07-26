@@ -3,7 +3,7 @@
   "minimum_chrome_version": "109",
   "name": "WatchParty",
   "version": "1.0.0",
-  "description": "Sync video playback with friends across YouTube, Netflix, Prime Video, and JioHotstar.",
+  "description": "Sync video playback with friends across YouTube, Netflix, Prime Video, JioHotstar, and any site you approve.",
   "permissions": ["storage", "tabs", "scripting", "activeTab", "alarms", "offscreen"],
   "host_permissions": [
     "*://*.youtube.com/*",
@@ -11,6 +11,7 @@
     "*://*.primevideo.com/*",
     "*://*.hotstar.com/*"
   ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "src/background/service-worker.js",
     "type": "module"

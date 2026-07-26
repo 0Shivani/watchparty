@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./popup.css";
-import { parseInviteLink } from "../lib/parseInviteLink.js";
+import { formatPlatformLabel, parseInviteLink } from "../lib/parseInviteLink.js";
 
 function formatTime(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -19,44 +19,39 @@ function formatAction(action) {
   return `${labelByType[action.type] || action.type} at ${formatTime(action.currentTime)}`;
 }
 
-function getPlatformFromUrl(url) {
-  if (!url) return "";
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    if (hostname.includes("youtube.com")) return "youtube";
-    if (hostname.includes("netflix.com")) return "netflix";
-    if (hostname.includes("primevideo.com")) return "primevideo";
-    if (hostname.includes("hotstar.com")) return "hotstar";
-    return "";
-  } catch {
-    return "";
-  }
-}
-
-function detectPlatformFromActiveTab() {
+function sendMessage(message) {
   return new Promise((resolve) => {
     try {
-      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+      chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime.lastError) {
-          resolve("");
+          resolve(null);
           return;
         }
-        resolve(getPlatformFromUrl(tabs?.[0]?.url));
+        resolve(response || null);
       });
     } catch {
-      resolve("");
+      resolve(null);
     }
   });
 }
 
-function formatPlatform(platform) {
-  const labels = {
-    youtube: "YouTube",
-    netflix: "Netflix",
-    primevideo: "Prime Video",
-    hotstar: "JioHotstar",
-  };
-  return labels[String(platform || "").toLowerCase()] || "Unknown";
+// The service worker owns the list of user-approved sites, so platform
+// resolution has to round-trip through it rather than parsing the URL here.
+async function detectPlatformFromActiveTab() {
+  const response = await sendMessage({ type: "POPUP_DETECT_PLATFORM" });
+  return response?.platform || "";
+}
+
+function requestSitePermission(matchPattern) {
+  return new Promise((resolve) => {
+    try {
+      chrome.permissions.request({ origins: [matchPattern] }, (granted) => {
+        resolve(!chrome.runtime.lastError && Boolean(granted));
+      });
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 
@@ -86,11 +81,23 @@ export default function App() {
   const [isResyncing, setIsResyncing] = useState(false);
   const [resyncNotice, setResyncNotice] = useState("");
 
+  const [siteAccess, setSiteAccess] = useState(null);
+  const [isUpdatingSiteAccess, setIsUpdatingSiteAccess] = useState(false);
+
   const uiState = useMemo(() => {
     if (!serverUrl) return "setup";
     if (inRoom) return "in-room";
     return "lobby";
   }, [serverUrl, inRoom]);
+
+  const refreshSiteAccess = useCallback(async () => {
+    const response = await sendMessage({ type: "POPUP_GET_SITE_ACCESS" });
+    setSiteAccess(response);
+  }, []);
+
+  useEffect(() => {
+    refreshSiteAccess();
+  }, [refreshSiteAccess]);
 
   useEffect(() => {
     chrome.runtime.sendMessage({ type: "POPUP_GET_STATE" }, (response) => {
@@ -329,6 +336,35 @@ export default function App() {
     }
   }
 
+  async function handleToggleSiteAccess() {
+    if (!siteAccess?.canApprove || !siteAccess.origin) return;
+    setIsUpdatingSiteAccess(true);
+    setErrorText("");
+    try {
+      const enabling = !siteAccess.approved;
+      if (enabling) {
+        const granted = await requestSitePermission(siteAccess.matchPattern);
+        if (!granted) {
+          setErrorText("Chrome did not grant access to this site.");
+          return;
+        }
+      }
+
+      const result = await sendMessage({
+        type: "POPUP_SET_SITE_ACCESS",
+        origin: siteAccess.origin,
+        enabled: enabling,
+      });
+      if (!result?.ok) {
+        setErrorText(result?.message || "Could not update site access.");
+        return;
+      }
+      await refreshSiteAccess();
+    } finally {
+      setIsUpdatingSiteAccess(false);
+    }
+  }
+
   async function handleResync() {
     setIsResyncing(true);
     setResyncNotice("");
@@ -388,6 +424,37 @@ export default function App() {
 
       {!!errorText && <div className="banner banner--error">{errorText}</div>}
       {!!resyncNotice && <div className="banner banner--info">{resyncNotice}</div>}
+
+      {uiState !== "in-room" && siteAccess?.canApprove && (
+        <section className="site-card">
+          {siteAccess.pendingInvite && !siteAccess.approved && (
+            <p className="site-card__invite">
+              Invite to room <strong>{siteAccess.pendingInvite.roomCode}</strong> on this site. Enable
+              it to join.
+            </p>
+          )}
+          <div className="site-card__row">
+            <span className="site-card__host" title={siteAccess.hostname}>
+              {siteAccess.hostname}
+            </span>
+            <span className={`site-card__badge ${siteAccess.approved ? "is-on" : ""}`}>
+              {siteAccess.approved ? "Enabled" : "Not enabled"}
+            </span>
+          </div>
+          <button className="btn" onClick={handleToggleSiteAccess} disabled={isUpdatingSiteAccess}>
+            {isUpdatingSiteAccess
+              ? "Updating..."
+              : siteAccess.approved
+                ? "Disable on this site"
+                : "Enable on this site"}
+          </button>
+          <p className="helper">
+            {siteAccess.approved
+              ? "WatchParty syncs the main video player on this site. Disabling also revokes its access."
+              : "Grants WatchParty access to this site so it can sync its video player. Use only for content you are allowed to watch."}
+          </p>
+        </section>
+      )}
 
       {uiState === "setup" && (
         <section className="card">
@@ -461,7 +528,7 @@ export default function App() {
           <p className="room__username">
             Watching as <strong>{username}</strong>
           </p>
-          <div className="meta">🌐 Room platform: {formatPlatform(platform)}</div>
+          <div className="meta">🌐 Room platform: {formatPlatformLabel(platform)}</div>
           <div className="meta">👥 {memberCount} in room</div>
           <div className="sync-pill">{formatAction(lastSync)}</div>
           {memberCount > 1 && (

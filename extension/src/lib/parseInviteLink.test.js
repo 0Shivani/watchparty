@@ -1,5 +1,10 @@
 import { describe, test, expect } from "vitest";
-import { parseInviteContextFromUrl, parseInviteLink } from "./parseInviteLink.js";
+import {
+  formatPlatformLabel,
+  isSupportedPlatform,
+  parseInviteContextFromUrl,
+  parseInviteLink,
+} from "./parseInviteLink.js";
 
 describe("parseInviteLink", () => {
   test("valid https link returns serverUrl and uppercased roomCode", () => {
@@ -131,5 +136,61 @@ describe("parseInviteContextFromUrl", () => {
         "https://www.youtube.com/watch?v=abc&wp_room=ABC123&wp_server=https%3A%2F%2Fexample.com&wp_platform=unknown"
       )
     ).toBeNull();
+  });
+
+  test("accepts a hostname-scoped generic platform", () => {
+    expect(
+      parseInviteContextFromUrl(
+        "https://media.example.com/watch/9?wp_room=ABC123&wp_server=https%3A%2F%2Fexample.com&wp_platform=generic%3Amedia.example.com"
+      )
+    ).toEqual({
+      roomCode: "ABC123",
+      serverUrl: "https://example.com",
+      platform: "generic:media.example.com",
+    });
+  });
+});
+
+describe("isSupportedPlatform", () => {
+  test.each(["youtube", "netflix", "primevideo", "hotstar"])("accepts built-in %s", (platform) => {
+    expect(isSupportedPlatform(platform)).toBe(true);
+  });
+
+  test("accepts a hostname-scoped generic platform", () => {
+    expect(isSupportedPlatform("generic:plex.example.com")).toBe(true);
+  });
+
+  test("accepts a generic platform with a port-free localhost host", () => {
+    expect(isSupportedPlatform("generic:localhost")).toBe(true);
+  });
+
+  test("rejects a bare generic key with no host", () => {
+    expect(isSupportedPlatform("generic:")).toBe(false);
+  });
+
+  test("rejects a generic key containing a path separator", () => {
+    expect(isSupportedPlatform("generic:example.com/evil")).toBe(false);
+  });
+
+  test("rejects unknown platforms and empty input", () => {
+    expect(isSupportedPlatform("unknown")).toBe(false);
+    expect(isSupportedPlatform("")).toBe(false);
+    expect(isSupportedPlatform(null)).toBe(false);
+  });
+});
+
+describe("formatPlatformLabel", () => {
+  test("maps built-in platforms to display names", () => {
+    expect(formatPlatformLabel("primevideo")).toBe("Prime Video");
+    expect(formatPlatformLabel("hotstar")).toBe("JioHotstar");
+  });
+
+  test("shows the bare hostname for generic platforms", () => {
+    expect(formatPlatformLabel("generic:media.example.com")).toBe("media.example.com");
+  });
+
+  test("falls back to Unknown for empty or unrecognized input", () => {
+    expect(formatPlatformLabel("")).toBe("Unknown");
+    expect(formatPlatformLabel("nope")).toBe("Unknown");
   });
 });

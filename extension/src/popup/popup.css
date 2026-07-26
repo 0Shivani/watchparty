@@ -238,6 +238,53 @@ input:focus {
   line-height: 1;
 }
 
+.site-card {
+  background: #141414;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.site-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.site-card__host {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f4f4f4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-card__badge {
+  flex-shrink: 0;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #9a9a9a;
+}
+
+.site-card__badge.is-on {
+  border-color: rgba(48, 201, 107, 0.45);
+  color: #7ee3a6;
+}
+
+.site-card__invite {
+  margin: 0;
+  font-size: 12px;
+  color: #f5a623;
+}
+
 .resync-card {
   background: #121212;
   border: 1px solid #2d2d2d;

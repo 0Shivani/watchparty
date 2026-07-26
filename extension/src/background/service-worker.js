@@ -7,8 +7,12 @@ const STORAGE_KEYS = {
   watchUrl: "watchUrl",
 };
 
+const SITES_STORAGE_KEY = "approvedSites";
 const ALARM_NAME = "keepAlive";
 const OFFSCREEN_URL = chrome.runtime.getURL("src/offscreen/offscreen.html");
+const GENERIC_SCRIPT_ID = "watchparty-generic";
+// Stable copies emitted by the vite build; CRXJS hashes the bundled originals.
+const GENERIC_SCRIPT_FILES = ["dynamic/chat-overlay.js", "dynamic/generic.js"];
 
 let sessionState = {
   serverUrl: "",
@@ -25,6 +29,10 @@ let pendingAutoJoin = null;
 let lastHandledInviteKey = "";
 let ackRequestCounter = 0;
 const pendingAckRequests = new Map();
+// Origins the user approved for the generic adapter, mirrored from storage so
+// platform resolution stays synchronous.
+let approvedOrigins = new Set();
+let pendingSiteInvite = null;
 
 async function ensureOffscreenDocument() {
   const existing = await chrome.offscreen.hasDocument?.();
@@ -68,7 +76,7 @@ function isSupportedPlatformUrl(url) {
   return Boolean(getPlatformFromUrl(url));
 }
 
-function getPlatformFromUrl(url) {
+function getBuiltInPlatformFromUrl(url) {
   if (!url) return "";
   try {
     const hostname = new URL(url).hostname.toLowerCase();
@@ -79,6 +87,171 @@ function getPlatformFromUrl(url) {
     return "";
   } catch {
     return "";
+  }
+}
+
+function normalizeOrigin(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+function originToMatchPattern(origin) {
+  return origin ? `${origin}/*` : "";
+}
+
+function getPlatformFromUrl(url) {
+  const builtIn = getBuiltInPlatformFromUrl(url);
+  if (builtIn) return builtIn;
+
+  const origin = normalizeOrigin(url);
+  if (!origin || !approvedOrigins.has(origin)) return "";
+  try {
+    return `generic:${new URL(origin).hostname.toLowerCase()}`;
+  } catch {
+    return "";
+  }
+}
+
+async function restoreApprovedOrigins() {
+  const stored = await chrome.storage.local.get([SITES_STORAGE_KEY]);
+  const list = Array.isArray(stored[SITES_STORAGE_KEY]) ? stored[SITES_STORAGE_KEY] : [];
+  approvedOrigins = new Set(list.map(normalizeOrigin).filter(Boolean));
+}
+
+// Drops origins whose host permission was revoked outside the popup (e.g. from
+// chrome://extensions) so we never advertise sites we can no longer script.
+async function pruneRevokedOrigins() {
+  const checks = await Promise.all(
+    [...approvedOrigins].map(async (origin) => ({
+      origin,
+      granted: await chrome.permissions
+        .contains({ origins: [originToMatchPattern(origin)] })
+        .catch(() => false),
+    }))
+  );
+
+  const granted = checks.filter((entry) => entry.granted).map((entry) => entry.origin);
+  if (granted.length === approvedOrigins.size) return;
+
+  approvedOrigins = new Set(granted);
+  await chrome.storage.local.set({ [SITES_STORAGE_KEY]: granted });
+}
+
+async function syncGenericContentScripts() {
+  const existing = await chrome.scripting
+    .getRegisteredContentScripts({ ids: [GENERIC_SCRIPT_ID] })
+    .catch(() => []);
+  if (existing.length > 0) {
+    await chrome.scripting.unregisterContentScripts({ ids: [GENERIC_SCRIPT_ID] }).catch(() => {});
+  }
+
+  const matches = [...approvedOrigins].map(originToMatchPattern).filter(Boolean);
+  if (matches.length === 0) return;
+
+  await chrome.scripting
+    .registerContentScripts([
+      {
+        id: GENERIC_SCRIPT_ID,
+        matches,
+        js: GENERIC_SCRIPT_FILES,
+        allFrames: true,
+        runAt: "document_idle",
+        persistAcrossSessions: true,
+      },
+    ])
+    .catch(() => {});
+}
+
+// Registration only covers future navigations, so inject into tabs the user
+// already has open to avoid forcing a manual reload.
+async function injectIntoOpenTabs(origin) {
+  const pattern = originToMatchPattern(origin);
+  if (!pattern) return;
+  const tabs = await chrome.tabs.query({ url: pattern }).catch(() => []);
+  await Promise.all(
+    tabs
+      .filter((tab) => tab?.id)
+      .map((tab) =>
+        chrome.scripting
+          .executeScript({
+            target: { tabId: tab.id, allFrames: true },
+            files: GENERIC_SCRIPT_FILES,
+          })
+          .catch(() => {})
+      )
+  );
+}
+
+async function setSiteApproval(rawOrigin, enabled) {
+  const origin = normalizeOrigin(rawOrigin);
+  if (!origin) return { ok: false, message: "That page cannot be synced." };
+  if (getBuiltInPlatformFromUrl(origin)) {
+    return { ok: false, message: "This site already has built-in support." };
+  }
+
+  const pattern = originToMatchPattern(origin);
+
+  if (enabled) {
+    const granted = await chrome.permissions.contains({ origins: [pattern] }).catch(() => false);
+    if (!granted) {
+      return { ok: false, message: "Permission for this site was not granted." };
+    }
+    approvedOrigins.add(origin);
+  } else {
+    approvedOrigins.delete(origin);
+  }
+
+  await chrome.storage.local.set({ [SITES_STORAGE_KEY]: [...approvedOrigins] });
+  await syncGenericContentScripts();
+
+  if (enabled) {
+    await injectIntoOpenTabs(origin);
+    if (pendingSiteInvite?.origin === origin) {
+      pendingSiteInvite = null;
+      updateInviteBadge();
+    }
+  } else {
+    const tabs = await chrome.tabs.query({ url: pattern }).catch(() => []);
+    tabs.forEach((tab) => {
+      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "ROOM_LEFT" }).catch(() => {});
+    });
+    await chrome.permissions.remove({ origins: [pattern] }).catch(() => {});
+  }
+
+  return { ok: true, origin, enabled };
+}
+
+function updateInviteBadge() {
+  const text = pendingSiteInvite ? "1" : "";
+  chrome.action?.setBadgeText?.({ text });
+  if (pendingSiteInvite) {
+    chrome.action?.setBadgeBackgroundColor?.({ color: "#f5a623" });
+  }
+}
+
+function parseInviteParamsFromUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const roomCode = String(url.searchParams.get("wp_room") || "").toUpperCase().trim();
+    const rawServerUrl = String(url.searchParams.get("wp_server") || "").trim();
+    if (!roomCode || !rawServerUrl) return null;
+
+    const serverUrl = normalizeServerUrl(rawServerUrl);
+    if (!serverUrl) return null;
+
+    return {
+      roomCode,
+      serverUrl,
+      platform: String(url.searchParams.get("wp_platform") || "").toLowerCase().trim(),
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -258,7 +431,37 @@ chrome.runtime.onInstalled.addListener(async () => {
   });
 });
 
-restoreSessionState().then(restoreAlarmIfNeeded);
+// MV3 restarts this worker constantly, so tab-sourced messages can arrive before
+// state is rehydrated. Handlers that resolve a platform wait on this first.
+const whenReady = Promise.all([restoreSessionState(), restoreApprovedOrigins()]).catch(() => {});
+
+whenReady.then(restoreAlarmIfNeeded).catch(() => {});
+whenReady.then(pruneRevokedOrigins).then(syncGenericContentScripts).catch(() => {});
+
+chrome.permissions.onRemoved.addListener(() => {
+  pruneRevokedOrigins().then(syncGenericContentScripts).catch(() => {});
+});
+
+// Guests landing on an invite link for a site they have not approved get no
+// content script, so detect the handshake from the tab URL and surface it in the
+// popup instead.
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  const url = changeInfo.url || tab?.url || "";
+  if (!url) return;
+
+  const invite = parseInviteParamsFromUrl(url);
+  if (!invite) return;
+
+  whenReady.then(() => {
+    if (getPlatformFromUrl(url)) return;
+
+    const origin = normalizeOrigin(url);
+    if (!origin) return;
+
+    pendingSiteInvite = { ...invite, origin, hostname: new URL(origin).hostname };
+    updateInviteBadge();
+  });
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "POPUP_CONNECT") {
@@ -276,19 +479,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "POPUP_GET_SITE_ACCESS") {
+    (async () => {
+      await whenReady;
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+      const url = tabs[0]?.url || "";
+      const origin = normalizeOrigin(url);
+      const builtInPlatform = getBuiltInPlatformFromUrl(url);
+      const hostname = origin ? new URL(origin).hostname : "";
+
+      sendResponse({
+        origin,
+        hostname,
+        builtInPlatform,
+        approved: Boolean(origin) && approvedOrigins.has(origin),
+        canApprove: Boolean(origin) && !builtInPlatform,
+        matchPattern: originToMatchPattern(origin),
+        platform: getPlatformFromUrl(url),
+        pendingInvite:
+          pendingSiteInvite && pendingSiteInvite.origin === origin ? { ...pendingSiteInvite } : null,
+      });
+    })();
+    return true;
+  }
+
+  if (message.type === "POPUP_SET_SITE_ACCESS") {
+    setSiteApproval(message.origin, Boolean(message.enabled))
+      .then((result) => sendResponse(result))
+      .catch(() => sendResponse({ ok: false, message: "Could not update site access." }));
+    return true;
+  }
+
+  if (message.type === "POPUP_DETECT_PLATFORM") {
+    whenReady
+      .then(getCurrentPlatformFromTabs)
+      .then((platform) => sendResponse({ platform }))
+      .catch(() => sendResponse({ platform: "" }));
+    return true;
+  }
+
   if (message.type === "CONTENT_GET_SESSION") {
-    const senderPlatform = getPlatformFromUrl(sender?.tab?.url);
-    sendResponse({
-      inRoom: Boolean(sessionState.inRoom),
-      username: sessionState.username || "",
-      roomCode: sessionState.roomCode || "",
-      platform: sessionState.platform || "",
-      tabPlatform: senderPlatform,
-      shouldMountChat:
-        Boolean(sessionState.inRoom) &&
-        Boolean(sessionState.username) &&
-        Boolean(senderPlatform) &&
-        senderPlatform === (sessionState.platform || ""),
+    whenReady.then(() => {
+      const senderPlatform = getPlatformFromUrl(sender?.tab?.url);
+      sendResponse({
+        inRoom: Boolean(sessionState.inRoom),
+        username: sessionState.username || "",
+        roomCode: sessionState.roomCode || "",
+        platform: sessionState.platform || "",
+        tabPlatform: senderPlatform,
+        shouldMountChat:
+          Boolean(sessionState.inRoom) &&
+          Boolean(sessionState.username) &&
+          Boolean(senderPlatform) &&
+          senderPlatform === (sessionState.platform || ""),
+      });
     });
     return true;
   }
@@ -411,70 +655,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "LOCAL_EVENT" && sender.tab) {
-    const platform = getPlatformFromUrl(sender.tab.url);
-    if (!platform) return;
-    toOffscreen({
-      type: "OFFSCREEN_EMIT",
-      event: "sync-event",
-      payload: { roomCode: sessionState.roomCode, action: message.action, platform },
+    whenReady.then(() => {
+      const platform = getPlatformFromUrl(sender.tab.url);
+      if (!platform) return;
+      toOffscreen({
+        type: "OFFSCREEN_EMIT",
+        event: "sync-event",
+        payload: { roomCode: sessionState.roomCode, action: message.action, platform },
+      });
     });
     return;
   }
 
   if (message.type === "AD_STARTED" && sender.tab) {
-    const platform = getPlatformFromUrl(sender.tab.url);
-    if (!platform) return;
-    toOffscreen({
-      type: "OFFSCREEN_EMIT",
-      event: "ad-started",
-      payload: { roomCode: sessionState.roomCode, platform },
+    whenReady.then(() => {
+      const platform = getPlatformFromUrl(sender.tab.url);
+      if (!platform) return;
+      toOffscreen({
+        type: "OFFSCREEN_EMIT",
+        event: "ad-started",
+        payload: { roomCode: sessionState.roomCode, platform },
+      });
     });
     return;
   }
 
   if (message.type === "AD_ENDED" && sender.tab) {
-    const platform = getPlatformFromUrl(sender.tab.url);
-    if (!platform) return;
-    toOffscreen({
-      type: "OFFSCREEN_EMIT",
-      event: "ad-ended",
-      payload: { roomCode: sessionState.roomCode, platform },
+    whenReady.then(() => {
+      const platform = getPlatformFromUrl(sender.tab.url);
+      if (!platform) return;
+      toOffscreen({
+        type: "OFFSCREEN_EMIT",
+        event: "ad-ended",
+        payload: { roomCode: sessionState.roomCode, platform },
+      });
     });
     return;
   }
 
   if (message.type === "CHAT_SEND" && sender.tab) {
-    const platform = getPlatformFromUrl(sender.tab.url);
-    if (!platform) return;
-    toOffscreen({
-      type: "OFFSCREEN_EMIT",
-      event: "chat-message",
-      payload: { roomCode: sessionState.roomCode, text: message.payload.text, platform },
+    whenReady.then(() => {
+      const platform = getPlatformFromUrl(sender.tab.url);
+      if (!platform) return;
+      toOffscreen({
+        type: "OFFSCREEN_EMIT",
+        event: "chat-message",
+        payload: { roomCode: sessionState.roomCode, text: message.payload.text, platform },
+      });
     });
     return;
   }
 
   if (message.type === "WATCH_URL_CHANGED" && sender.tab) {
-    const tabPlatform = getPlatformFromUrl(sender.tab.url);
-    const platform = message.platform || tabPlatform;
-    const watchUrl = normalizeWatchUrl(message.watchUrl || sender.tab.url || "");
-    if (!watchUrl) return;
+    whenReady.then(() => {
+      const tabPlatform = getPlatformFromUrl(sender.tab.url);
+      const platform = message.platform || tabPlatform;
+      const watchUrl = normalizeWatchUrl(message.watchUrl || sender.tab.url || "");
+      if (!watchUrl) return;
 
-    if (sessionState.watchUrl !== watchUrl) {
-      persistSession({ watchUrl });
-    }
+      if (sessionState.watchUrl !== watchUrl) {
+        persistSession({ watchUrl });
+      }
 
-    if (!sessionState.inRoom || !sessionState.roomCode) return;
-    if (platform && sessionState.platform && platform !== sessionState.platform) return;
+      if (!sessionState.inRoom || !sessionState.roomCode) return;
+      if (platform && sessionState.platform && platform !== sessionState.platform) return;
 
-    toOffscreen({
-      type: "OFFSCREEN_EMIT",
-      event: "set-room-watch-target",
-      payload: {
-        roomCode: sessionState.roomCode,
-        watchUrl,
-        platform: sessionState.platform || platform || "",
-      },
+      toOffscreen({
+        type: "OFFSCREEN_EMIT",
+        event: "set-room-watch-target",
+        payload: {
+          roomCode: sessionState.roomCode,
+          watchUrl,
+          platform: sessionState.platform || platform || "",
+        },
+      });
     });
     return;
   }
