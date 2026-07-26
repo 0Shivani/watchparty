@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy Policy - Picnic</title>
+    <meta name="description" content="Privacy policy for the Picnic Chrome extension." />
+    <link rel="icon" type="image/png" href="./icon128.png" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .legal {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 48px 24px 80px;
+      }
+      .legal h1 {
+        font-size: 2rem;
+        margin-bottom: 4px;
+      }
+      .legal .updated {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        margin-bottom: 36px;
+      }
+      .legal h2 {
+        font-size: 1.25rem;
+        margin: 32px 0 10px;
+      }
+      .legal p,
+      .legal li {
+        color: var(--text-muted);
+      }
+      .legal strong {
+        color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="nav">
+      <div class="nav__brand">
+        <img src="./icon128.png" alt="Picnic logo" width="32" height="32" />
+        <span>Picnic</span>
+      </div>
+      <a class="btn btn--ghost" href="./index.html">Home</a>
+    </header>
+
+    <main class="legal">
+      <h1>Privacy Policy</h1>
+      <p class="updated">Last updated: July 26, 2026</p>
+
+      <p>
+        Picnic is a Chrome extension that synchronizes video playback and chat
+        between friends. This policy describes what data the extension handles
+        and how it is used.
+      </p>
+
+      <h2>Data the extension transmits</h2>
+      <p>
+        To make watch parties work, the extension sends the following to the
+        party server (operated by us or self-hosted by the room's host):
+      </p>
+      <ul>
+        <li>
+          <strong>Display name</strong> - a nickname you choose when joining a
+          room. It does not need to be your real name.
+        </li>
+        <li>
+          <strong>Chat messages</strong> - messages you type in the chat overlay
+          are relayed in real time to the other members of your room.
+        </li>
+        <li>
+          <strong>Playback events</strong> - play, pause, and seek actions with
+          their video timestamps, so everyone's playback stays in sync.
+        </li>
+        <li>
+          <strong>Watch page URL</strong> - when you create an invite link, the
+          URL of the video you are watching is sent to the server so invited
+          friends can be redirected to the same video.
+        </li>
+      </ul>
+
+      <h2>How data is stored</h2>
+      <ul>
+        <li>
+          Rooms exist <strong>in memory only</strong> on the server. Chat
+          messages are relayed and never written to a database. When a room
+          empties, all of its data (including the watch URL) is deleted within
+          about 45 seconds.
+        </li>
+        <li>
+          Invite links expire automatically after 15 minutes.
+        </li>
+        <li>
+          Your display name, server URL, and room code are stored locally in
+          your browser (chrome.storage.local) so your session survives closing
+          the popup. They never leave your device except as described above.
+        </li>
+      </ul>
+
+      <h2>What we do not do</h2>
+      <ul>
+        <li>No analytics, tracking, or telemetry of any kind.</li>
+        <li>No collection of browsing history, page content, or account data.</li>
+        <li>No selling or sharing of any data with third parties.</li>
+        <li>No use of data for advertising, profiling, or creditworthiness.</li>
+      </ul>
+
+      <h2>Permissions</h2>
+      <p>
+        The extension only runs on YouTube, Netflix, Prime Video, and JioHotstar.
+        Access to any other website is granted only if you explicitly approve it
+        through a browser permission prompt, and can be revoked at any time from
+        the extension settings.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions about this policy can be raised on the project's GitHub
+        repository: <a href="https://github.com/0Shivani/watchparty">github.com/0Shivani/watchparty</a>.
+      </p>
+    </main>
+
+    <footer class="footer">
+      <p>Picnic - sync video playback with friends.</p>
+      <p class="footer__muted">Not affiliated with YouTube, Netflix, Amazon, or Disney/Hotstar.</p>
+    </footer>
+  </body>
+</html>
