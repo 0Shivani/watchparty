@@ -86,6 +86,12 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [usernameInput, setUsernameInput] = useState("");
   const [usernameError, setUsernameError] = useState("");
+  // The message listener is registered once; keep these current so room join
+  // handlers do not persist a stale empty name from the first render.
+  const usernameRef = useRef("");
+  const usernameInputRef = useRef("");
+  usernameRef.current = username;
+  usernameInputRef.current = usernameInput;
 
   const [errorText, setErrorText] = useState("");
   const [expiredBanner, setExpiredBanner] = useState(false);
@@ -205,7 +211,7 @@ export default function App() {
   function handleSocketEvent({ event, payload }) {
     if (event === "room-created") {
       const createdCode = payload?.roomCode || "";
-      const activeUsername = usernameInput.trim() || username.trim();
+      const activeUsername = usernameInputRef.current.trim() || usernameRef.current.trim();
       setRoomCode(createdCode);
       setRoomCodeInput(createdCode);
       setUsername(activeUsername);
@@ -223,7 +229,7 @@ export default function App() {
 
     if (event === "room-joined") {
       const joinedCode = payload?.roomCode || "";
-      const activeUsername = usernameInput.trim() || username.trim();
+      const activeUsername = usernameInputRef.current.trim() || usernameRef.current.trim();
       setRoomCode(joinedCode);
       setRoomCodeInput(joinedCode);
       setUsername(activeUsername);
