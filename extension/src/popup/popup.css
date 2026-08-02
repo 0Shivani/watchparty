@@ -92,6 +92,15 @@ input:focus {
   background: #3d0e19;
 }
 
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn:disabled:hover {
+  background: var(--surface-raised);
+}
+
 .btn.primary {
   border-color: var(--hibiscus);
   background: var(--hibiscus);

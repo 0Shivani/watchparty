@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./popup.css";
 import { formatPlatformLabel, parseInviteLink } from "../lib/parseInviteLink.js";
+import { DEFAULT_SERVER_URL } from "../lib/config.js";
 
 function formatTime(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -42,6 +43,16 @@ async function detectPlatformFromActiveTab() {
   return response?.platform || "";
 }
 
+function toServerOrigin(raw) {
+  try {
+    const parsed = new URL(String(raw || "").trim());
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
 function requestSitePermission(matchPattern) {
   return new Promise((resolve) => {
     try {
@@ -59,8 +70,10 @@ export default function App() {
   const [connectionState, setConnectionState] = useState("disconnected");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
 
-  const [serverUrl, setServerUrl] = useState("");
-  const [serverUrlInput, setServerUrlInput] = useState("");
+  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
+  const [serverUrlInput, setServerUrlInput] = useState(DEFAULT_SERVER_URL);
+  const [showServerSettings, setShowServerSettings] = useState(false);
+  const hasRequestedConnect = useRef(false);
 
   const [roomCode, setRoomCode] = useState("");
   const [roomCodeInput, setRoomCodeInput] = useState("");
@@ -85,10 +98,24 @@ export default function App() {
   const [isUpdatingSiteAccess, setIsUpdatingSiteAccess] = useState(false);
 
   const uiState = useMemo(() => {
-    if (!serverUrl) return "setup";
+    if (showServerSettings) return "setup";
     if (inRoom) return "in-room";
     return "lobby";
-  }, [serverUrl, inRoom]);
+  }, [showServerSettings, inRoom]);
+
+  const connectionStatusLabel = useMemo(() => {
+    if (connectionState === "connected" || connectionState === "reconnected") return "Connected";
+    if (connectionState === "failed") return "Could not reach server";
+    return "Connecting...";
+  }, [connectionState]);
+
+  const serverHostLabel = useMemo(() => {
+    try {
+      return new URL(serverUrl).hostname;
+    } catch {
+      return serverUrl;
+    }
+  }, [serverUrl]);
 
   const refreshSiteAccess = useCallback(async () => {
     const response = await sendMessage({ type: "POPUP_GET_SITE_ACCESS" });
@@ -119,6 +146,21 @@ export default function App() {
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
+  // No setup step: bring the stored (or hosted default) server online as soon as
+  // the popup opens.
+  useEffect(() => {
+    if (hasRequestedConnect.current) return;
+    hasRequestedConnect.current = true;
+
+    sendMessage({ type: "POPUP_ENSURE_CONNECTED" }).then((response) => {
+      if (response?.serverUrl) {
+        setServerUrl(response.serverUrl);
+        setServerUrlInput(response.serverUrl);
+      }
+      setConnectionState((current) => (current === "connected" ? current : "connecting"));
+    });
+  }, []);
+
   useEffect(() => {
     if (uiState === "lobby" && pendingRoomCode) {
       setRoomCodeInput(pendingRoomCode);
@@ -126,9 +168,10 @@ export default function App() {
   }, [uiState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyStateSnapshot(snapshot) {
-    if (snapshot.serverUrl != null) {
+    // serverUrlInput is deliberately left alone here so background state pushes
+    // cannot overwrite what the user is typing in the server settings panel.
+    if (snapshot.serverUrl) {
       setServerUrl(snapshot.serverUrl);
-      setServerUrlInput(snapshot.serverUrl);
     }
     if (snapshot.connectionState != null) setConnectionState(snapshot.connectionState);
     if (snapshot.reconnectAttempt != null) setReconnectAttempt(snapshot.reconnectAttempt);
@@ -229,16 +272,39 @@ export default function App() {
     return true;
   }
 
-  function handleSaveServer() {
-    if (!serverUrlInput.trim()) return;
-    const normalizedServerUrl = serverUrlInput.trim();
-    chrome.runtime.sendMessage({
-      type: "POPUP_CONNECT",
-      serverUrl: normalizedServerUrl,
-    });
-    setServerUrl(normalizedServerUrl);
+  function connectToServer(nextServerUrl) {
+    chrome.runtime.sendMessage({ type: "POPUP_CONNECT", serverUrl: nextServerUrl });
+    setServerUrl(nextServerUrl);
+    setServerUrlInput(nextServerUrl);
     setConnectionState("connecting");
     setErrorText("");
+  }
+
+  function handleSaveServer() {
+    const origin = toServerOrigin(serverUrlInput);
+    if (!origin) {
+      setErrorText("Enter a valid server URL, e.g. https://my-server.example.com");
+      return;
+    }
+    connectToServer(origin);
+    setShowServerSettings(false);
+  }
+
+  function handleUseDefaultServer() {
+    connectToServer(DEFAULT_SERVER_URL);
+    setShowServerSettings(false);
+  }
+
+  function handleRoomCodeInputChange(raw) {
+    const parsed = parseInviteLink(raw);
+    if (!parsed) {
+      setRoomCodeInput(raw);
+      return;
+    }
+    setRoomCodeInput(parsed.roomCode);
+    if (parsed.serverUrl !== serverUrl) {
+      connectToServer(parsed.serverUrl);
+    }
   }
 
   async function handleCreateRoom() {
@@ -293,22 +359,10 @@ export default function App() {
     setLastSync(null);
   }
 
-  function handleChangeServer() {
-    chrome.runtime.sendMessage({ type: "POPUP_DISCONNECT" });
-    setServerUrl("");
-    setServerUrlInput("");
-    setConnectionState("disconnected");
-    setReconnectAttempt(0);
-    setInRoom(false);
-    setRoomCode("");
-    setRoomCodeInput("");
-    setMemberCount(0);
-    setPlatform("");
-    setLastSync(null);
+  function handleOpenServerSettings() {
+    setServerUrlInput(serverUrl || DEFAULT_SERVER_URL);
     setErrorText("");
-    setExpiredBanner(false);
-    setAdBanner(null);
-    setUsernameError("");
+    setShowServerSettings(true);
   }
 
   async function copyCode() {
@@ -458,10 +512,10 @@ export default function App() {
 
       {uiState === "setup" && (
         <section className="card">
-          <label htmlFor="server-url">Invite Link</label>
+          <label htmlFor="server-url">Server URL</label>
           <input
             id="server-url"
-            placeholder="https://your-server.ngrok-free.app?room=ABC123"
+            placeholder="https://your-server.ngrok-free.app"
             value={serverUrlInput}
             onChange={(e) => {
               const raw = e.target.value;
@@ -478,7 +532,18 @@ export default function App() {
           <button className="btn primary" onClick={handleSaveServer}>
             Save & Connect
           </button>
-          <p className="helper">Hosts: paste just your server URL. Guests: paste the full invite link.</p>
+          {serverUrl !== DEFAULT_SERVER_URL && (
+            <button className="btn" onClick={handleUseDefaultServer}>
+              Use the Picnic server
+            </button>
+          )}
+          <button className="link-btn" onClick={() => setShowServerSettings(false)}>
+            Cancel
+          </button>
+          <p className="helper">
+            Only needed if you run your own Picnic server. Everyone in a room must be on the same
+            server.
+          </p>
         </section>
       )}
 
@@ -486,7 +551,7 @@ export default function App() {
         <section className="card">
           <div className="status-row">
             <span className={`dot ${connectionState === "connected" ? "online" : "offline"}`} />
-            <span>{connectionState === "connected" ? "Connected" : "Disconnected"}</span>
+            <span>{connectionStatusLabel}</span>
           </div>
           <div className="field">
             <label htmlFor="username-input">Your display name</label>
@@ -506,16 +571,22 @@ export default function App() {
           <button className="btn primary" onClick={handleCreateRoom}>
             Create Room
           </button>
-          {pendingRoomCode && (
-            <>
-              <div className="divider">or</div>
-              <button className="btn" onClick={handleJoinRoom}>
-                Join Room
-              </button>
-            </>
-          )}
-          <button className="link-btn" onClick={handleChangeServer}>
-            Change server
+          <div className="divider">or</div>
+          <div className="field">
+            <label htmlFor="room-code-input">Room code or invite link</label>
+            <input
+              id="room-code-input"
+              type="text"
+              placeholder="ABC123"
+              value={roomCodeInput}
+              onChange={(e) => handleRoomCodeInputChange(e.target.value)}
+            />
+          </div>
+          <button className="btn" onClick={handleJoinRoom} disabled={!roomCodeInput.trim()}>
+            Join Room
+          </button>
+          <button className="link-btn" onClick={handleOpenServerSettings}>
+            {serverUrl === DEFAULT_SERVER_URL ? "Use a custom server" : `Server: ${serverHostLabel}`}
           </button>
         </section>
       )}

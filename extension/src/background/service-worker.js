@@ -1,3 +1,5 @@
+import { DEFAULT_SERVER_URL } from "../lib/config.js";
+
 const STORAGE_KEYS = {
   serverUrl: "serverUrl",
   roomCode: "roomCode",
@@ -15,7 +17,7 @@ const GENERIC_SCRIPT_ID = "watchparty-generic";
 const GENERIC_SCRIPT_FILES = ["dynamic/chat-overlay.js", "dynamic/generic.js"];
 
 let sessionState = {
-  serverUrl: "",
+  serverUrl: DEFAULT_SERVER_URL,
   roomCode: "",
   inRoom: false,
   username: "",
@@ -321,7 +323,7 @@ async function persistSession(updates) {
 
 async function restoreSessionState() {
   const stored = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
-  sessionState.serverUrl = stored[STORAGE_KEYS.serverUrl] || "";
+  sessionState.serverUrl = stored[STORAGE_KEYS.serverUrl] || DEFAULT_SERVER_URL;
   sessionState.roomCode = stored[STORAGE_KEYS.roomCode] || "";
   sessionState.inRoom = Boolean(stored[STORAGE_KEYS.inRoom]);
   sessionState.username = stored[STORAGE_KEYS.username] || "";
@@ -423,7 +425,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.storage.local.set({
-    [STORAGE_KEYS.serverUrl]: "",
+    [STORAGE_KEYS.serverUrl]: DEFAULT_SERVER_URL,
     [STORAGE_KEYS.roomCode]: "",
     [STORAGE_KEYS.inRoom]: false,
     [STORAGE_KEYS.username]: "",
@@ -468,7 +470,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "POPUP_CONNECT") {
     const serverUrl = normalizeServerUrl(message.serverUrl);
     if (!serverUrl) return;
-    persistSession({ serverUrl }).then(async () => {
+
+    whenReady.then(async () => {
+      // Room codes belong to one server, so pointing at a different one has to
+      // drop the current room rather than try to rejoin it elsewhere.
+      const switchingServers = sessionState.serverUrl !== serverUrl;
+      if (switchingServers) pendingAutoJoin = null;
+
+      await persistSession({
+        serverUrl,
+        ...(switchingServers ? { roomCode: "", inRoom: false, platform: "", watchUrl: "" } : {}),
+      });
+
+      if (switchingServers) {
+        chrome.alarms.clear(ALARM_NAME);
+        toSupportedTabs({ type: "ROOM_LEFT" });
+      }
       await ensureOffscreenDocument();
       toOffscreen({ type: "OFFSCREEN_CONNECT", serverUrl });
     });
@@ -476,7 +493,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "POPUP_GET_STATE") {
-    sendResponse({ sessionState });
+    whenReady.then(() => sendResponse({ sessionState }));
+    return true;
+  }
+
+  // The popup opens straight into the lobby, so it asks the worker to bring the
+  // stored (or default hosted) server online instead of prompting for a URL.
+  if (message.type === "POPUP_ENSURE_CONNECTED") {
+    (async () => {
+      await whenReady;
+      const serverUrl = sessionState.serverUrl || DEFAULT_SERVER_URL;
+      if (sessionState.serverUrl !== serverUrl) {
+        await persistSession({ serverUrl });
+      }
+      await ensureOffscreenDocument();
+      toOffscreen({ type: "OFFSCREEN_CONNECT", serverUrl });
+      sendResponse({ serverUrl, connectionState: sessionState.connectionState });
+    })();
     return true;
   }
 
@@ -634,7 +667,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "POPUP_DISCONNECT") {
     pendingAutoJoin = null;
-    persistSession({ serverUrl: "", roomCode: "", inRoom: false, platform: "", watchUrl: "" }).then(async () => {
+    persistSession({
+      serverUrl: DEFAULT_SERVER_URL,
+      roomCode: "",
+      inRoom: false,
+      platform: "",
+      watchUrl: "",
+    }).then(async () => {
       chrome.alarms.clear(ALARM_NAME);
       toOffscreen({ type: "OFFSCREEN_DISCONNECT" });
       await closeOffscreenDocument();

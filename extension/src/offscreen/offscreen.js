@@ -24,7 +24,11 @@ function isNgrokUrl(serverUrl) {
 
 function connectSocket(serverUrl) {
   if (!serverUrl) return;
-  if (socket?.connected && currentServerUrl === serverUrl) return;
+  if (socket?.connected && currentServerUrl === serverUrl) {
+    // The worker may have restarted and lost its view of the connection.
+    toServiceWorker("SOCKET_STATE", { state: "connected" });
+    return;
+  }
 
   if (socket) {
     socket.removeAllListeners();

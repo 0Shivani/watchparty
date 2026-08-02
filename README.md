@@ -153,7 +153,7 @@ npm run build      # outputs to extension/dist/
 
 ### 4. Watch together
 
-1. Everyone connects the extension to the same server URL once
+1. The popup connects to the hosted Picnic server on its own. To use your own server instead, click **Use a custom server** and paste its URL — everyone in the room must be on the same server
 2. Host opens a supported OTT title, creates a room, then clicks **Copy Invite Link**
 3. Friends click that invite link directly from chat/social
 4. The browser redirects them to the same OTT title and the extension auto-joins the room in background
