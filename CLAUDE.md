@@ -35,11 +35,11 @@ Offscreen Document (Socket.io client)
 Node.js Server (Express + Socket.io)
 ```
 
-**Service Worker** (`extension/src/background/service-worker.js`): Pure message router — no business logic. Owns session state (serverUrl, roomCode, username, platform, connectionState) and persists it to `chrome.storage.local`. Routes messages between all layers. Creates/manages the Offscreen Document lifecycle. Fires a Chrome alarm every 24 s to keep itself alive while in a room.
+**Service Worker** (`extension/src/background/service-worker.js`): Pure message router — no business logic. Owns session state (serverUrl, roomCode, username, platform, connectionState, offline) and persists it to `chrome.storage.local`. Routes messages between all layers. Creates/manages the Offscreen Document lifecycle. Fires a Chrome alarm every 24 s to keep itself alive while in a room. An explicit Disconnect sets a persisted `offline` flag that blocks auto-reconnect on popup open; create/join (or saving a custom server) clears it and brings the socket back.
 
-**Offscreen Document** (`extension/src/offscreen/offscreen.js`): Holds the persistent Socket.io connection. Survives popup close (Chrome 109+ feature). Handles Socket.io reconnection, auto-rejoins the room on reconnect, and detects ngrok URLs to force WebSocket-only transport (avoids ngrok polling errors).
+**Offscreen Document** (`extension/src/offscreen/offscreen.js`): Holds the persistent Socket.io connection. Survives popup close (Chrome 109+ feature). Handles Socket.io reconnection, auto-rejoins the room on reconnect, and detects ngrok URLs to force WebSocket-only transport (avoids ngrok polling errors). On `OFFSCREEN_DISCONNECT` it emits `leave-room` before dropping the socket so peers update immediately.
 
-**Popup** (`extension/src/popup/App.jsx`): Purely UI — three states: Lobby (create/join room), In-Room (invite link, member count, chat feed), and an opt-in Setup panel for custom server URLs. On open it sends `POPUP_ENSURE_CONNECTED` so the stored server (defaulting to `DEFAULT_SERVER_URL` in `extension/src/lib/config.js`) comes online without the user entering anything. Requests state snapshots from the service worker; never touches Socket.io directly.
+**Popup** (`extension/src/popup/App.jsx`): Purely UI — three states: Lobby (create/join room), In-Room (invite link, member count, chat feed), and an opt-in Setup panel for custom server URLs. On open it sends `POPUP_ENSURE_CONNECTED` so the stored server (defaulting to `DEFAULT_SERVER_URL` in `extension/src/lib/config.js`) comes online without the user entering anything — unless the user previously disconnected. In-room offers Leave Room (back to lobby, stay connected) and Disconnect (fully offline, chat unmounted). Requests state snapshots from the service worker; never touches Socket.io directly.
 
 **Content Scripts** (`extension/src/content/`): One file per platform (youtube.js, netflix.js, prime.js, hotstar.js). Each hooks the platform's video element, detects ads, and mounts/unmounts the chat overlay (`chat-overlay.js`). Vanilla JS only — no bundler runs on content scripts. `ad-detection.js` is a shared utility used by Hotstar.
 
@@ -61,7 +61,7 @@ Because a guest arriving on an invite link for an unapproved site has no content
 |---|---|---|
 | Popup → SW | `POPUP_CONNECT`, `POPUP_ENSURE_CONNECTED`, `POPUP_EMIT`, `POPUP_DISCONNECT` | User-initiated actions + connect-on-open |
 | Popup → SW | `POPUP_GET_SITE_ACCESS`, `POPUP_SET_SITE_ACCESS`, `POPUP_DETECT_PLATFORM` | Approve/revoke sites, resolve the active tab's platform |
-| SW → Offscreen | `OFFSCREEN_CONNECT`, `OFFSCREEN_EMIT`, `OFFSCREEN_AUTO_REJOIN` | Socket control |
+| SW → Offscreen | `OFFSCREEN_CONNECT`, `OFFSCREEN_EMIT`, `OFFSCREEN_DISCONNECT`, `OFFSCREEN_AUTO_REJOIN` | Socket control |
 | Offscreen → SW | `SOCKET_STATE`, `SOCKET_EVENT` | Connection state + server events |
 | SW → Content | `APPLY_SYNC`, `AD_STARTED_REMOTE`, `AD_ENDED_REMOTE`, `ROOM_JOINED`, `ROOM_LEFT`, `INCOMING_CHAT` | Sync commands |
 | Content → SW | `LOCAL_EVENT`, `AD_STARTED`, `AD_ENDED`, `CHAT_SEND` | Player events + chat |
