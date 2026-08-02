@@ -12,15 +12,23 @@ import manifest from "./manifest.json";
 const DYNAMIC_CONTENT_SCRIPTS = ["chat-overlay.js", "generic.js", "netflix-player-bridge.js"];
 
 function copyDynamicContentScripts() {
+  const copyAll = (outDir) => {
+    mkdirSync(outDir, { recursive: true });
+    DYNAMIC_CONTENT_SCRIPTS.forEach((file) => {
+      copyFileSync(resolve(__dirname, "src/content", file), resolve(outDir, file));
+    });
+  };
+
   return {
     name: "watchparty-copy-dynamic-content-scripts",
     apply: "build",
+    // CRXJS resolves web_accessible_resources before closeBundle, so stage a copy
+    // under public/ for the Netflix page-world bridge.
+    buildStart() {
+      copyAll(resolve(__dirname, "public/dynamic"));
+    },
     closeBundle() {
-      const outDir = resolve(__dirname, "dist/dynamic");
-      mkdirSync(outDir, { recursive: true });
-      DYNAMIC_CONTENT_SCRIPTS.forEach((file) => {
-        copyFileSync(resolve(__dirname, "src/content", file), resolve(outDir, file));
-      });
+      copyAll(resolve(__dirname, "dist/dynamic"));
     },
   };
 }

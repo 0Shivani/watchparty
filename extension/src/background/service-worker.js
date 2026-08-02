@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   username: "username",
   platform: "platform",
   watchUrl: "watchUrl",
+  offline: "offline",
 };
 
 const SITES_STORAGE_KEY = "approvedSites";
@@ -15,6 +16,7 @@ const OFFSCREEN_URL = chrome.runtime.getURL("src/offscreen/offscreen.html");
 const GENERIC_SCRIPT_ID = "watchparty-generic";
 // Stable copies emitted by the vite build; CRXJS hashes the bundled originals.
 const GENERIC_SCRIPT_FILES = ["dynamic/chat-overlay.js", "dynamic/generic.js"];
+const PENDING_ROOM_ACTION_TIMEOUT_MS = 8000;
 
 let sessionState = {
   serverUrl: DEFAULT_SERVER_URL,
@@ -23,11 +25,15 @@ let sessionState = {
   username: "",
   platform: "",
   watchUrl: "",
+  offline: false,
   connectionState: "disconnected",
   reconnectAttempt: 0,
   memberCount: 0,
+  pendingInvite: null,
 };
 let pendingAutoJoin = null;
+let pendingRoomAction = null;
+let pendingRoomActionTimeoutId = null;
 let lastHandledInviteKey = "";
 let ackRequestCounter = 0;
 const pendingAckRequests = new Map();
@@ -318,6 +324,7 @@ async function persistSession(updates) {
     [STORAGE_KEYS.username]: sessionState.username,
     [STORAGE_KEYS.platform]: sessionState.platform,
     [STORAGE_KEYS.watchUrl]: sessionState.watchUrl,
+    [STORAGE_KEYS.offline]: sessionState.offline,
   });
 }
 
@@ -329,6 +336,68 @@ async function restoreSessionState() {
   sessionState.username = stored[STORAGE_KEYS.username] || "";
   sessionState.platform = stored[STORAGE_KEYS.platform] || "";
   sessionState.watchUrl = stored[STORAGE_KEYS.watchUrl] || "";
+  sessionState.offline = Boolean(stored[STORAGE_KEYS.offline]);
+  if (sessionState.offline) {
+    sessionState.connectionState = "offline";
+  }
+}
+
+function clearPendingRoomAction() {
+  if (pendingRoomActionTimeoutId) {
+    clearTimeout(pendingRoomActionTimeoutId);
+    pendingRoomActionTimeoutId = null;
+  }
+  pendingRoomAction = null;
+}
+
+function flushPendingRoomAction() {
+  if (!pendingRoomAction) return;
+  const action = pendingRoomAction;
+  clearPendingRoomAction();
+  toOffscreen({
+    type: "OFFSCREEN_EMIT",
+    event: action.event,
+    payload: action.payload,
+  });
+}
+
+function queuePendingRoomAction(event, payload) {
+  clearPendingRoomAction();
+  pendingRoomAction = { event, payload };
+  pendingRoomActionTimeoutId = setTimeout(() => {
+    pendingRoomAction = null;
+    pendingRoomActionTimeoutId = null;
+    toPopup({
+      type: "STATE_UPDATE",
+      sessionState: { ...sessionState },
+      socketEvent: {
+        event: "room-error",
+        payload: { message: "Could not reach the server. Try again." },
+      },
+    });
+  }, PENDING_ROOM_ACTION_TIMEOUT_MS);
+}
+
+function sendOffscreenDisconnect(roomCode = "") {
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => resolve({ ok: false }), 1500);
+    try {
+      chrome.runtime.sendMessage(
+        { type: "OFFSCREEN_DISCONNECT", roomCode },
+        (response) => {
+          clearTimeout(timeoutId);
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false });
+            return;
+          }
+          resolve(response || { ok: true });
+        }
+      );
+    } catch {
+      clearTimeout(timeoutId);
+      resolve({ ok: false });
+    }
+  });
 }
 
 async function restoreAlarmIfNeeded() {
@@ -431,6 +500,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     [STORAGE_KEYS.username]: "",
     [STORAGE_KEYS.platform]: "",
     [STORAGE_KEYS.watchUrl]: "",
+    [STORAGE_KEYS.offline]: false,
   });
 });
 
@@ -479,8 +549,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       await persistSession({
         serverUrl,
+        offline: false,
         ...(switchingServers ? { roomCode: "", inRoom: false, platform: "", watchUrl: "" } : {}),
       });
+      sessionState.connectionState = "connecting";
 
       if (switchingServers) {
         chrome.alarms.clear(ALARM_NAME);
@@ -488,6 +560,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       await ensureOffscreenDocument();
       toOffscreen({ type: "OFFSCREEN_CONNECT", serverUrl });
+      toPopup({ type: "STATE_UPDATE", sessionState: { ...sessionState } });
     });
     return;
   }
@@ -499,6 +572,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // The popup opens straight into the lobby, so it asks the worker to bring the
   // stored (or default hosted) server online instead of prompting for a URL.
+  // When the user has explicitly disconnected, stay offline until create/join.
   if (message.type === "POPUP_ENSURE_CONNECTED") {
     (async () => {
       await whenReady;
@@ -506,9 +580,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sessionState.serverUrl !== serverUrl) {
         await persistSession({ serverUrl });
       }
+
+      if (sessionState.offline) {
+        sessionState.connectionState = "offline";
+        sendResponse({
+          serverUrl,
+          connectionState: "offline",
+          offline: true,
+        });
+        return;
+      }
+
       await ensureOffscreenDocument();
       toOffscreen({ type: "OFFSCREEN_CONNECT", serverUrl });
-      sendResponse({ serverUrl, connectionState: sessionState.connectionState });
+      sendResponse({
+        serverUrl,
+        connectionState: sessionState.connectionState,
+        offline: false,
+      });
     })();
     return true;
   }
@@ -573,15 +662,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "POPUP_EMIT") {
     if (message.event === "create-room" || message.event === "join-room") {
-      getCurrentPlatformFromTabs()
-        .then((platform) => {
-          const payload = { ...(message.payload || {}) };
-          if (platform) payload.platform = platform;
-          toOffscreen({ type: "OFFSCREEN_EMIT", event: message.event, payload });
-        })
-        .catch(() => {
-          toOffscreen({ type: "OFFSCREEN_EMIT", event: message.event, payload: message.payload });
-        });
+      (async () => {
+        await whenReady;
+        const platform = await getCurrentPlatformFromTabs().catch(() => "");
+        const payload = { ...(message.payload || {}) };
+        if (platform) payload.platform = platform;
+
+        const needsReconnect =
+          sessionState.offline ||
+          (sessionState.connectionState !== "connected" &&
+            sessionState.connectionState !== "reconnected");
+
+        if (needsReconnect) {
+          await persistSession({ offline: false });
+          sessionState.connectionState = "connecting";
+          sessionState.pendingInvite = null;
+          queuePendingRoomAction(message.event, payload);
+          await ensureOffscreenDocument();
+          toOffscreen({
+            type: "OFFSCREEN_CONNECT",
+            serverUrl: sessionState.serverUrl || DEFAULT_SERVER_URL,
+          });
+          toPopup({ type: "STATE_UPDATE", sessionState: { ...sessionState } });
+          return;
+        }
+
+        toOffscreen({ type: "OFFSCREEN_EMIT", event: message.event, payload });
+      })();
       return;
     }
 
@@ -640,9 +747,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "POPUP_JOINED_ROOM") {
+    sessionState.pendingInvite = null;
     persistSession({
       roomCode: message.roomCode,
       inRoom: true,
+      offline: false,
       username: message.username,
       platform: message.platform || sessionState.platform || "",
       watchUrl: sessionState.watchUrl || "",
@@ -666,19 +775,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "POPUP_DISCONNECT") {
-    pendingAutoJoin = null;
-    persistSession({
-      serverUrl: DEFAULT_SERVER_URL,
-      roomCode: "",
-      inRoom: false,
-      platform: "",
-      watchUrl: "",
-    }).then(async () => {
-      chrome.alarms.clear(ALARM_NAME);
-      toOffscreen({ type: "OFFSCREEN_DISCONNECT" });
+    (async () => {
+      await whenReady;
+      const roomCode = sessionState.roomCode || "";
+      pendingAutoJoin = null;
+      clearPendingRoomAction();
+      lastHandledInviteKey = "";
+      sessionState.pendingInvite = null;
+
+      // Mark offline before tearing the socket down so late SOCKET_STATE events
+      // cannot flip the UI back to "connecting".
+      await persistSession({
+        offline: true,
+        roomCode: "",
+        inRoom: false,
+        platform: "",
+        watchUrl: "",
+      });
+      sessionState.connectionState = "offline";
+      sessionState.memberCount = 0;
+      sessionState.reconnectAttempt = 0;
+
+      await sendOffscreenDisconnect(roomCode);
       await closeOffscreenDocument();
+
+      chrome.alarms.clear(ALARM_NAME);
       toSupportedTabs({ type: "ROOM_LEFT" });
-    });
+      toPopup({ type: "STATE_UPDATE", sessionState: { ...sessionState } });
+    })();
     return;
   }
 
@@ -696,6 +820,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "LOCAL_EVENT" && sender.tab) {
     whenReady.then(() => {
+      if (!sessionState.inRoom || !sessionState.roomCode) return;
       const platform = getPlatformFromUrl(sender.tab.url);
       if (!platform) return;
       toOffscreen({
@@ -709,6 +834,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "AD_STARTED" && sender.tab) {
     whenReady.then(() => {
+      if (!sessionState.inRoom || !sessionState.roomCode) return;
       const platform = getPlatformFromUrl(sender.tab.url);
       if (!platform) return;
       toOffscreen({
@@ -722,6 +848,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "AD_ENDED" && sender.tab) {
     whenReady.then(() => {
+      if (!sessionState.inRoom || !sessionState.roomCode) return;
       const platform = getPlatformFromUrl(sender.tab.url);
       if (!platform) return;
       toOffscreen({
@@ -735,6 +862,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "CHAT_SEND" && sender.tab) {
     whenReady.then(() => {
+      if (!sessionState.inRoom || !sessionState.roomCode) return;
       const platform = getPlatformFromUrl(sender.tab.url);
       if (!platform) return;
       toOffscreen({
@@ -781,30 +909,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!serverUrl || !roomCode) return;
 
     const inviteKey = `${serverUrl}|${roomCode}|${platform}`;
-    if (inviteKey === lastHandledInviteKey && sessionState.inRoom && sessionState.roomCode === roomCode) {
-      return;
-    }
-    lastHandledInviteKey = inviteKey;
 
-    pendingAutoJoin = {
-      serverUrl,
-      roomCode,
-      username: sessionState.username || "Guest",
-      platform: platform || sessionState.platform || "",
-    };
+    whenReady.then(async () => {
+      // After an explicit disconnect, surface the invite in the lobby but do not
+      // reconnect or auto-join until the user creates/joins again.
+      if (sessionState.offline) {
+        sessionState.pendingInvite = { roomCode, serverUrl, platform };
+        toPopup({ type: "STATE_UPDATE", sessionState: { ...sessionState } });
+        return;
+      }
 
-    const isAlreadyInSameRoom =
-      sessionState.inRoom &&
-      normalizeRoomCode(sessionState.roomCode) === roomCode &&
-      normalizeServerUrl(sessionState.serverUrl) === serverUrl &&
-      (!pendingAutoJoin.platform || pendingAutoJoin.platform === sessionState.platform);
+      if (inviteKey === lastHandledInviteKey && sessionState.inRoom && sessionState.roomCode === roomCode) {
+        return;
+      }
+      lastHandledInviteKey = inviteKey;
 
-    persistSession({
-      serverUrl,
-      roomCode,
-      inRoom: isAlreadyInSameRoom ? true : false,
-      platform: pendingAutoJoin.platform,
-    }).then(async () => {
+      pendingAutoJoin = {
+        serverUrl,
+        roomCode,
+        username: sessionState.username || "Guest",
+        platform: platform || sessionState.platform || "",
+      };
+
+      const isAlreadyInSameRoom =
+        sessionState.inRoom &&
+        normalizeRoomCode(sessionState.roomCode) === roomCode &&
+        normalizeServerUrl(sessionState.serverUrl) === serverUrl &&
+        (!pendingAutoJoin.platform || pendingAutoJoin.platform === sessionState.platform);
+
+      await persistSession({
+        serverUrl,
+        roomCode,
+        inRoom: isAlreadyInSameRoom ? true : false,
+        platform: pendingAutoJoin.platform,
+      });
       await ensureOffscreenDocument();
       toOffscreen({ type: "OFFSCREEN_CONNECT", serverUrl });
       if (sessionState.connectionState === "connected" || sessionState.connectionState === "reconnected") {
@@ -821,6 +959,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "SOCKET_STATE") {
+    // Ignore socket chatter after an intentional disconnect; the offscreen
+    // document may still emit a final "disconnected" before it closes.
+    if (sessionState.offline && message.state !== "connected" && message.state !== "reconnected") {
+      sessionState.connectionState = "offline";
+      toPopup({ type: "STATE_UPDATE", sessionState: { ...sessionState } });
+      return;
+    }
+
     sessionState.connectionState = message.state;
     if (message.attempt) sessionState.reconnectAttempt = message.attempt;
 
@@ -833,10 +979,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           platform: sessionState.platform || "",
         });
       }
+      flushPendingRoomAction();
       triggerPendingAutoJoin();
     }
 
     if (message.state === "connected") {
+      flushPendingRoomAction();
       triggerPendingAutoJoin();
     }
 
@@ -851,6 +999,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (payload?.platform) {
         sessionState.platform = payload.platform;
       }
+      sessionState.offline = false;
+      sessionState.pendingInvite = null;
+      clearPendingRoomAction();
     }
 
     if (event === "room-joined" && pendingAutoJoin) {

@@ -125,15 +125,29 @@ function disconnectSocket() {
   }
 }
 
-chrome.runtime.onMessage.addListener((message) => {
+async function leaveAndDisconnect(roomCode = "") {
+  if (socket?.connected && roomCode) {
+    socket.emit("leave-room", { roomCode });
+    // Brief flush so the leave-room packet can leave before the socket drops.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  disconnectSocket();
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
     case "OFFSCREEN_CONNECT":
       connectSocket(message.serverUrl);
       break;
 
     case "OFFSCREEN_DISCONNECT":
-      disconnectSocket();
-      break;
+      leaveAndDisconnect(message.roomCode || "")
+        .then(() => sendResponse({ ok: true }))
+        .catch(() => {
+          disconnectSocket();
+          sendResponse({ ok: true });
+        });
+      return true;
 
     case "OFFSCREEN_EMIT":
       if (socket?.connected) {

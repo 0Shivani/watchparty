@@ -69,6 +69,7 @@ function requestSitePermission(matchPattern) {
 export default function App() {
   const [connectionState, setConnectionState] = useState("disconnected");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [offline, setOffline] = useState(false);
 
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [serverUrlInput, setServerUrlInput] = useState(DEFAULT_SERVER_URL);
@@ -104,10 +105,14 @@ export default function App() {
   }, [showServerSettings, inRoom]);
 
   const connectionStatusLabel = useMemo(() => {
+    if (offline || connectionState === "offline") {
+      return "Disconnected — creating or joining a room will reconnect";
+    }
     if (connectionState === "connected" || connectionState === "reconnected") return "Connected";
     if (connectionState === "failed") return "Could not reach server";
+    if (connectionState === "disconnected") return "Disconnected";
     return "Connecting...";
-  }, [connectionState]);
+  }, [connectionState, offline]);
 
   const serverHostLabel = useMemo(() => {
     try {
@@ -147,7 +152,7 @@ export default function App() {
   }, []);
 
   // No setup step: bring the stored (or hosted default) server online as soon as
-  // the popup opens.
+  // the popup opens — unless the user previously disconnected on purpose.
   useEffect(() => {
     if (hasRequestedConnect.current) return;
     hasRequestedConnect.current = true;
@@ -157,6 +162,12 @@ export default function App() {
         setServerUrl(response.serverUrl);
         setServerUrlInput(response.serverUrl);
       }
+      if (response?.offline || response?.connectionState === "offline") {
+        setOffline(true);
+        setConnectionState("offline");
+        return;
+      }
+      setOffline(false);
       setConnectionState((current) => (current === "connected" ? current : "connecting"));
     });
   }, []);
@@ -173,6 +184,7 @@ export default function App() {
     if (snapshot.serverUrl) {
       setServerUrl(snapshot.serverUrl);
     }
+    if (snapshot.offline != null) setOffline(Boolean(snapshot.offline));
     if (snapshot.connectionState != null) setConnectionState(snapshot.connectionState);
     if (snapshot.reconnectAttempt != null) setReconnectAttempt(snapshot.reconnectAttempt);
     if (snapshot.roomCode != null) {
@@ -183,6 +195,10 @@ export default function App() {
     if (snapshot.platform != null) setPlatform(snapshot.platform);
     if (snapshot.username != null) {
       setUsername(snapshot.username);
+    }
+    if (snapshot.pendingInvite?.roomCode && !snapshot.inRoom) {
+      setPendingRoomCode(snapshot.pendingInvite.roomCode);
+      setRoomCodeInput((current) => current || snapshot.pendingInvite.roomCode);
     }
   }
 
@@ -357,6 +373,22 @@ export default function App() {
     setPlatform("");
     setAdBanner(null);
     setLastSync(null);
+    setResyncNotice("");
+  }
+
+  function handleDisconnect() {
+    chrome.runtime.sendMessage({ type: "POPUP_DISCONNECT" });
+    setOffline(true);
+    setConnectionState("offline");
+    setInRoom(false);
+    setRoomCode("");
+    setRoomCodeInput("");
+    setMemberCount(0);
+    setPlatform("");
+    setAdBanner(null);
+    setLastSync(null);
+    setResyncNotice("");
+    setErrorText("");
   }
 
   function handleOpenServerSettings() {
@@ -550,7 +582,13 @@ export default function App() {
       {uiState === "lobby" && (
         <section className="card">
           <div className="status-row">
-            <span className={`dot ${connectionState === "connected" ? "online" : "offline"}`} />
+            <span
+              className={`dot ${
+                !offline && (connectionState === "connected" || connectionState === "reconnected")
+                  ? "online"
+                  : "offline"
+              }`}
+            />
             <span>{connectionStatusLabel}</span>
           </div>
           <div className="field">
@@ -615,6 +653,13 @@ export default function App() {
           <button className="btn danger-outline" onClick={handleLeaveRoom}>
             Leave Room
           </button>
+          <button className="btn danger-outline" onClick={handleDisconnect}>
+            Disconnect
+          </button>
+          <p className="helper">
+            Leave Room returns to the lobby while staying connected. Disconnect goes fully offline
+            and disables chat until you create or join again.
+          </p>
         </section>
       )}
     </div>
