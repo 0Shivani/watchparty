@@ -24,12 +24,30 @@
   const originalPushState = history.pushState;
   const originalReplaceState = history.replaceState;
 
-  let isSyncing = false;
   let currentVideo = null;
   let lastUrl = location.href;
   let lastReportedWatchUrl = "";
   let lastInviteContextKey = "";
   const attachedVideos = new WeakSet();
+
+  const SEEK_TOLERANCE_SECONDS = 2;
+  const SEEK_SUPPRESS_MS = 1000;
+  const PLAYBACK_SUPPRESS_MS = 400;
+
+  // Applying a remote command makes the player emit the very events we listen
+  // for. Suppressing by deadline rather than a boolean means a short pause
+  // window can never unmask a seek that is still in flight, and the guard
+  // always expires instead of wedging sync shut when an expected event never
+  // arrives.
+  let syncSuppressUntil = 0;
+
+  function suppressLocalEvents(ms) {
+    syncSuppressUntil = Math.max(syncSuppressUntil, Date.now() + ms);
+  }
+
+  function isSuppressed() {
+    return Date.now() < syncSuppressUntil;
+  }
 
   function startObserver(target, callback) {
     if (!target) return null;
@@ -156,7 +174,7 @@
     attachedVideos.add(video);
 
     const sendEvent = (type) => {
-      if (isSyncing) return;
+      if (isSuppressed()) return;
       if (video !== currentVideo) return;
       chrome.runtime.sendMessage({
         type: "LOCAL_EVENT",
@@ -223,37 +241,21 @@
       const { action } = message;
       if (!action || typeof action.type !== "string") return;
 
-      const hasCurrentTime = typeof action.currentTime === "number" && action.currentTime !== null;
-      if (hasCurrentTime && (action.type === "seek" || Math.abs(video.currentTime - action.currentTime) > 2)) {
-        isSyncing = true;
+      const hasCurrentTime = typeof action.currentTime === "number" && Number.isFinite(action.currentTime);
+      const drift = hasCurrentTime ? Math.abs(video.currentTime - action.currentTime) : 0;
+      if (hasCurrentTime && (action.type === "seek" || drift > SEEK_TOLERANCE_SECONDS)) {
+        suppressLocalEvents(SEEK_SUPPRESS_MS);
         video.currentTime = action.currentTime;
-        video.addEventListener(
-          "seeked",
-          () => {
-            isSyncing = false;
-          },
-          { once: true }
-        );
       }
 
       if (action.type === "play") {
-        isSyncing = true;
-        video
-          .play()
-          .catch(() => {})
-          .finally(() => {
-            setTimeout(() => {
-              isSyncing = false;
-            }, 300);
-          });
+        suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
+        video.play().catch(() => {});
       }
 
       if (action.type === "pause") {
-        isSyncing = true;
+        suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
         video.pause();
-        setTimeout(() => {
-          isSyncing = false;
-        }, 100);
       }
       return;
     }
@@ -283,16 +285,26 @@
     syncChatOverlayFromSession();
   }
 
+  // A throw here would propagate into the host page's own router and can trip
+  // its error boundary, so extension failures must never escape the override.
+  function safeOnNavigate() {
+    try {
+      onNavigate();
+    } catch {
+      // Extension context invalidated or the page is tearing down.
+    }
+  }
+
   function watchNavigation() {
     history.pushState = function pushState(...args) {
       originalPushState.apply(history, args);
-      onNavigate();
+      safeOnNavigate();
     };
     history.replaceState = function replaceState(...args) {
       originalReplaceState.apply(history, args);
-      onNavigate();
+      safeOnNavigate();
     };
-    window.addEventListener("popstate", onNavigate, listenerOptions);
+    window.addEventListener("popstate", safeOnNavigate, listenerOptions);
   }
 
   function teardown() {

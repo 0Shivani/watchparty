@@ -5,7 +5,6 @@ const {
 } =
   window.WatchPartyChat || {};
 
-let isSyncing = false;
 let currentVideo = null;
 let lastUrl = location.href;
 const attachedVideos = new WeakSet();
@@ -14,6 +13,27 @@ let adWatcherStarted = false;
 const PLATFORM = "netflix";
 let lastReportedWatchUrl = "";
 let lastInviteContextKey = "";
+
+const BRIDGE_COMMAND_SOURCE = "wp-netflix";
+const BRIDGE_ACK_SOURCE = "wp-netflix-bridge";
+const BRIDGE_TIMEOUT_MS = 300;
+const SEEK_TOLERANCE_SECONDS = 2;
+const SEEK_SUPPRESS_MS = 1000;
+const PLAYBACK_SUPPRESS_MS = 400;
+
+// Applying a remote command makes the player emit the very events we listen
+// for. Suppressing by deadline rather than a boolean means a short pause window
+// can never unmask a seek that is still in flight, and the guard always expires
+// instead of wedging sync shut when an expected event never arrives.
+let syncSuppressUntil = 0;
+
+function suppressLocalEvents(ms) {
+  syncSuppressUntil = Math.max(syncSuppressUntil, Date.now() + ms);
+}
+
+function isSuppressed() {
+  return Date.now() < syncSuppressUntil;
+}
 
 function isAdPlaying() {
   return !!(
@@ -47,6 +67,73 @@ function startAdWatcher() {
 
 function findVideo() {
   return document.querySelector(".VideoContainer video") || document.querySelector("video");
+}
+
+let bridgeInjected = false;
+let bridgeRequestCounter = 0;
+const pendingBridgeCommands = new Map();
+
+// Netflix's player rejects external writes to currentTime with a full-page
+// error, so playback is driven from the page world through its own player API.
+function injectPlayerBridge() {
+  if (bridgeInjected) return;
+  const target = document.head || document.documentElement;
+  if (!target) return;
+  bridgeInjected = true;
+
+  const script = document.createElement("script");
+  script.src = chrome.runtime.getURL("dynamic/netflix-player-bridge.js");
+  script.addEventListener("load", () => script.remove());
+  target.appendChild(script);
+}
+
+window.addEventListener("message", (event) => {
+  if (event.source !== window) return;
+  const data = event.data;
+  if (!data || data.source !== BRIDGE_ACK_SOURCE || !data.requestId) return;
+
+  const pending = pendingBridgeCommands.get(data.requestId);
+  if (!pending) return;
+  clearTimeout(pending.timeoutId);
+  pendingBridgeCommands.delete(data.requestId);
+  pending.resolve(Boolean(data.ok));
+});
+
+// Resolves false when the bridge is missing or could not reach a player, which
+// lets callers fall back to the raw element for the commands Netflix tolerates.
+function sendBridgeCommand(command, timeMs) {
+  injectPlayerBridge();
+
+  return new Promise((resolve) => {
+    const requestId = `wp_${Date.now()}_${bridgeRequestCounter++}`;
+    const timeoutId = setTimeout(() => {
+      pendingBridgeCommands.delete(requestId);
+      resolve(false);
+    }, BRIDGE_TIMEOUT_MS);
+
+    pendingBridgeCommands.set(requestId, { resolve, timeoutId });
+    window.postMessage({ source: BRIDGE_COMMAND_SOURCE, requestId, command, timeMs }, "*");
+  });
+}
+
+function remotePlay() {
+  suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
+  sendBridgeCommand("play").then((ok) => {
+    if (ok) return;
+    suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
+    findVideo()
+      ?.play()
+      .catch(() => {});
+  });
+}
+
+function remotePause() {
+  suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
+  sendBridgeCommand("pause").then((ok) => {
+    if (ok) return;
+    suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
+    findVideo()?.pause();
+  });
 }
 
 function normalizeWatchUrl(rawUrl = location.href) {
@@ -124,7 +211,7 @@ function attachPlayerListeners(video) {
   attachedVideos.add(video);
 
   const sendEvent = (type) => {
-    if (isSyncing) return;
+    if (isSuppressed()) return;
     if (adInProgress) return;
     chrome.runtime.sendMessage({
       type: "LOCAL_EVENT",
@@ -145,60 +232,32 @@ chrome.runtime.onMessage.addListener((message) => {
     const { action } = message;
     if (!action || typeof action.type !== "string") return;
 
-    const hasCurrentTime = typeof action.currentTime === "number" && action.currentTime !== null;
-    if (hasCurrentTime && (action.type === "seek" || Math.abs(video.currentTime - action.currentTime) > 2)) {
-      isSyncing = true;
-      video.currentTime = action.currentTime;
-      video.addEventListener(
-        "seeked",
-        () => {
-          isSyncing = false;
-        },
-        { once: true }
-      );
+    const hasCurrentTime = typeof action.currentTime === "number" && Number.isFinite(action.currentTime);
+    const drift = hasCurrentTime ? Math.abs(video.currentTime - action.currentTime) : 0;
+    if (hasCurrentTime && (action.type === "seek" || drift > SEEK_TOLERANCE_SECONDS)) {
+      suppressLocalEvents(SEEK_SUPPRESS_MS);
+      // No raw-element fallback: assigning currentTime is exactly what breaks
+      // Netflix, so a dropped seek is preferable to an error screen.
+      sendBridgeCommand("seek", action.currentTime * 1000);
     }
 
     if (action.type === "play") {
-      isSyncing = true;
-      video
-        .play()
-        .catch(() => {})
-        .finally(() => {
-          setTimeout(() => {
-            isSyncing = false;
-          }, 300);
-        });
+      remotePlay();
     }
 
     if (action.type === "pause") {
-      isSyncing = true;
-      video.pause();
-      setTimeout(() => {
-        isSyncing = false;
-      }, 100);
+      remotePause();
     }
     return;
   }
 
   if (message.type === "AD_STARTED_REMOTE") {
-    isSyncing = true;
-    const video = findVideo();
-    if (video) video.pause();
-    setTimeout(() => {
-      isSyncing = false;
-    }, 300);
+    remotePause();
     return;
   }
 
   if (message.type === "AD_ENDED_REMOTE") {
-    isSyncing = true;
-    const video = findVideo();
-    if (video) {
-      video.play().catch(() => {});
-    }
-    setTimeout(() => {
-      isSyncing = false;
-    }, 300);
+    remotePlay();
     return;
   }
 
@@ -261,16 +320,26 @@ function watchNavigation() {
   const _push = history.pushState.bind(history);
   const _replace = history.replaceState.bind(history);
 
+  // A throw here would propagate into Netflix's own router and can trip its
+  // error boundary, so extension failures must never escape the override.
+  const safeOnNavigate = () => {
+    try {
+      onNavigate();
+    } catch {
+      // Extension context invalidated or the page is tearing down.
+    }
+  };
+
   history.pushState = (...args) => {
     _push(...args);
-    onNavigate();
+    safeOnNavigate();
   };
   history.replaceState = (...args) => {
     _replace(...args);
-    onNavigate();
+    safeOnNavigate();
   };
 
-  window.addEventListener("popstate", onNavigate);
+  window.addEventListener("popstate", safeOnNavigate);
 }
 
 function onNavigate() {
@@ -283,6 +352,7 @@ function onNavigate() {
   syncChatOverlayFromSession();
 }
 
+injectPlayerBridge();
 watchNavigation();
 sendInviteContextIfPresent();
 sendWatchUrlChanged();

@@ -38,6 +38,12 @@
       "run_at": "document_idle"
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dynamic/netflix-player-bridge.js"],
+      "matches": ["*://*.netflix.com/*"]
+    }
+  ],
   "action": {
     "default_popup": "index.html",
     "default_icon": {

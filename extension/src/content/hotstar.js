@@ -7,7 +7,6 @@ const {
 } =
   window.WatchPartyChat || {};
 
-let isSyncing = false;
 let currentVideo = null;
 let lastUrl = location.href;
 const attachedVideos = new WeakSet();
@@ -15,6 +14,24 @@ let adWatcher = null;
 const PLATFORM = "hotstar";
 let lastReportedWatchUrl = "";
 let lastInviteContextKey = "";
+
+const SEEK_TOLERANCE_SECONDS = 2;
+const SEEK_SUPPRESS_MS = 1000;
+const PLAYBACK_SUPPRESS_MS = 400;
+
+// Applying a remote command makes the player emit the very events we listen
+// for. Suppressing by deadline rather than a boolean means a short pause window
+// can never unmask a seek that is still in flight, and the guard always expires
+// instead of wedging sync shut when an expected event never arrives.
+let syncSuppressUntil = 0;
+
+function suppressLocalEvents(ms) {
+  syncSuppressUntil = Math.max(syncSuppressUntil, Date.now() + ms);
+}
+
+function isSuppressed() {
+  return Date.now() < syncSuppressUntil;
+}
 
 function startAdWatcher() {
   adWatcher = createAdWatcher(
@@ -102,7 +119,7 @@ function attachPlayerListeners(video) {
   attachedVideos.add(video);
 
   const sendEvent = (type) => {
-    if (isSyncing) return;
+    if (isSuppressed()) return;
     if (adWatcher?.isAdActive()) return;
     chrome.runtime.sendMessage({
       type: "LOCAL_EVENT",
@@ -123,60 +140,36 @@ chrome.runtime.onMessage.addListener((message) => {
     const { action } = message;
     if (!action || typeof action.type !== "string") return;
 
-    const hasCurrentTime = typeof action.currentTime === "number" && action.currentTime !== null;
-    if (hasCurrentTime && (action.type === "seek" || Math.abs(video.currentTime - action.currentTime) > 2)) {
-      isSyncing = true;
+    const hasCurrentTime = typeof action.currentTime === "number" && Number.isFinite(action.currentTime);
+    const drift = hasCurrentTime ? Math.abs(video.currentTime - action.currentTime) : 0;
+    if (hasCurrentTime && (action.type === "seek" || drift > SEEK_TOLERANCE_SECONDS)) {
+      suppressLocalEvents(SEEK_SUPPRESS_MS);
       video.currentTime = action.currentTime;
-      video.addEventListener(
-        "seeked",
-        () => {
-          isSyncing = false;
-        },
-        { once: true }
-      );
     }
 
     if (action.type === "play") {
-      isSyncing = true;
-      video
-        .play()
-        .catch(() => {})
-        .finally(() => {
-          setTimeout(() => {
-            isSyncing = false;
-          }, 300);
-        });
+      suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
+      video.play().catch(() => {});
     }
 
     if (action.type === "pause") {
-      isSyncing = true;
+      suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
       video.pause();
-      setTimeout(() => {
-        isSyncing = false;
-      }, 100);
     }
     return;
   }
 
   if (message.type === "AD_STARTED_REMOTE") {
-    isSyncing = true;
-    const video = findVideo();
-    if (video) video.pause();
-    setTimeout(() => {
-      isSyncing = false;
-    }, 300);
+    suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
+    findVideo()?.pause();
     return;
   }
 
   if (message.type === "AD_ENDED_REMOTE") {
-    isSyncing = true;
-    const video = findVideo();
-    if (video) {
-      video.play().catch(() => {});
-    }
-    setTimeout(() => {
-      isSyncing = false;
-    }, 300);
+    suppressLocalEvents(PLAYBACK_SUPPRESS_MS);
+    findVideo()
+      ?.play()
+      .catch(() => {});
     return;
   }
 
@@ -238,16 +231,26 @@ function watchNavigation() {
   const _push = history.pushState.bind(history);
   const _replace = history.replaceState.bind(history);
 
+  // A throw here would propagate into the host page's own router and can trip
+  // its error boundary, so extension failures must never escape the override.
+  const safeOnNavigate = () => {
+    try {
+      onNavigate();
+    } catch {
+      // Extension context invalidated or the page is tearing down.
+    }
+  };
+
   history.pushState = (...args) => {
     _push(...args);
-    onNavigate();
+    safeOnNavigate();
   };
   history.replaceState = (...args) => {
     _replace(...args);
-    onNavigate();
+    safeOnNavigate();
   };
 
-  window.addEventListener("popstate", onNavigate);
+  window.addEventListener("popstate", safeOnNavigate);
 }
 
 function onNavigate() {

@@ -6,10 +6,10 @@ import { crx } from "@crxjs/vite-plugin";
 import manifest from "./manifest.json";
 
 // CRXJS rewrites manifest content scripts to hashed asset filenames, which
-// chrome.scripting.registerContentScripts cannot reference. These files are
-// plain vanilla JS with no imports, so copy them verbatim to a stable path the
-// service worker can register for user-approved sites.
-const DYNAMIC_CONTENT_SCRIPTS = ["chat-overlay.js", "generic.js"];
+// chrome.scripting.registerContentScripts cannot reference, and neither can the
+// page-world <script src> the Netflix bridge needs. These files are plain
+// vanilla JS with no imports, so copy them verbatim to a stable path.
+const DYNAMIC_CONTENT_SCRIPTS = ["chat-overlay.js", "generic.js", "netflix-player-bridge.js"];
 
 function copyDynamicContentScripts() {
   return {
